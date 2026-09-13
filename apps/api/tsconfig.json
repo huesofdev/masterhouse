@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    /* Target & Environment */
+    "target": "ES2022",                         /* Compiles down to a highly efficient, modern JS syntax */
+    "module": "ESNext",                         /* ✅ Changed to ESNext to work with the bundler strategy */
+    "moduleResolution": "Bundler",              /* ✅ Allows clean imports without typing .js or .ts extensions */
+    "lib": ["ES2022"],                          /* Limits autocomplete/types strictly to server-side ES features */
+
+    /* Directories */
+    "rootDir": "./src",                        
+    "outDir": "./dist",                        
+
+    /* Strictness & Safety */
+    "strict": true,                            
+    "noImplicitAny": true,                     
+    "strictNullChecks": true,                  
+    "noUncheckedIndexedAccess": true,          
+    "exactOptionalPropertyTypes": true,        
+
+    /* Quality of Life & Interop */
+    "esModuleInterop": true,                   
+    "skipLibCheck": true,                      
+    "forceConsistentCasingInFileNames": true,  
+    "sourceMap": true,                         
+    "resolveJsonModule": true                  
+  },
+  "include": ["src/**/*"],                     
+  "exclude": ["node_modules", "dist"]          
+}

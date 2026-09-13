@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1780481891339,
+      "tag": "0000_gray_zeigeist",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1780739000736,
+      "tag": "0001_sharp_nextwave",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1780756282387,
+      "tag": "0002_spooky_warlock",
+      "breakpoints": true
+    }
+  ]
+}
