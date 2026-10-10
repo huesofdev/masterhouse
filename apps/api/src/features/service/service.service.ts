@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, like, or } from "drizzle-orm";
+import { eq, and, desc, sql, like, or, ne } from "drizzle-orm";
 import { v7 as uuidv7 } from "uuid";
 import { db } from "../../db";
 import { returnsTable, warrantyClaimsTable } from "./service.schema";
@@ -7,14 +7,21 @@ import { serialItemsTable, inventoryBalancesTable } from "../inventory/inventory
 import { installmentContractsTable, installmentSchedulesTable, collectionReceiptsTable, refundsTable } from "../collections/collections.schema";
 import { customersTable } from "../customers/customers.schema";
 import { warehousesTable } from "../warehouses/warehouses.schema";
+import { productsTable } from "../products/products.schema";
+import { usersTable } from "../user/user.schema";
 import { ProcessReturnPayload, CreateWarrantyClaimPayload, UpdateWarrantyStatusPayload, CloseWarrantyClaimPayload } from "./service.types";
+import { AppError } from "../../error/AppError";
 
 export class ServiceEngine {
 
   // ─── Fetch sale + items for the return form ───────────────────────────────
-  static async getSaleWithItems(saleId: string) {
+  static async getSaleWithItems(saleIdOrRef: string) {
     const sale = await db.query.salesTable.findFirst({
-      where: eq(salesTable.id, saleId),
+      where: or(
+        eq(salesTable.id, saleIdOrRef),
+        eq(salesTable.reference_number, saleIdOrRef),
+        eq(salesTable.offline_receipt_number, saleIdOrRef)
+      ),
       with: {
         customer: true,
         items: {
@@ -27,6 +34,7 @@ export class ServiceEngine {
     });
     if (!sale) return null;
 
+    const saleId = sale.id;
     // Fetch existing returns for this sale
     const existingReturns = await db.select().from(returnsTable).where(eq(returnsTable.sale_id, saleId));
     const returnedSaleItemIds = new Set(existingReturns.map(r => r.sale_item_id));
@@ -105,16 +113,25 @@ export class ServiceEngine {
   }
 
   // ─── List all returns for a branch ─────────────────────────────────────────
-  static async listReturns(branchId: string, page: number = 1, limit: number = 30, search: string = '') {
+  static async listReturns(branchId: string, page: number = 1, limit: number = 20, search: string = '') {
     const offset = (page - 1) * limit;
     
     let whereClause: any = eq(salesTable.branch_id, branchId);
-    if (search) {
+    if (search && search.trim()) {
+      const term = `%${search.trim()}%`;
       whereClause = and(
         whereClause,
         or(
-          like(returnsTable.reason, `%${search}%`),
-          like(returnsTable.type, `%${search}%`)
+          like(returnsTable.reason, term),
+          like(returnsTable.type, term),
+          like(returnsTable.disposition, term),
+          like(salesTable.reference_number, term),
+          like(salesTable.offline_receipt_number, term),
+          like(customersTable.full_name, term),
+          like(customersTable.mobile, term),
+          like(productsTable.name, term),
+          like(serialItemsTable.serial_number, term),
+          like(usersTable.name, term)
         )
       );
     }
@@ -122,16 +139,30 @@ export class ServiceEngine {
     const data = await db.select({
       id: returnsTable.id,
       sale_id: returnsTable.sale_id,
+      reference_number: salesTable.reference_number,
+      offline_receipt_number: salesTable.offline_receipt_number,
+      customer_id: salesTable.customer_id,
+      customer_name: customersTable.full_name,
+      customer_mobile: customersTable.mobile,
+      product_name: productsTable.name,
+      serial_number: serialItemsTable.serial_number,
       type: returnsTable.type,
       disposition: returnsTable.disposition,
       reason: returnsTable.reason,
       refund_amount: returnsTable.refund_amount,
       refund_mode: returnsTable.refund_mode,
+      processed_by: returnsTable.processed_by,
+      processed_by_name: usersTable.name,
       created_at: returnsTable.created_at,
       sale_item_id: returnsTable.sale_item_id,
     })
     .from(returnsTable)
     .innerJoin(salesTable, eq(returnsTable.sale_id, salesTable.id))
+    .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
+    .leftJoin(saleItemsTable, eq(returnsTable.sale_item_id, saleItemsTable.id))
+    .leftJoin(productsTable, eq(saleItemsTable.product_id, productsTable.id))
+    .leftJoin(serialItemsTable, eq(returnsTable.serial_item_id, serialItemsTable.id))
+    .leftJoin(usersTable, eq(returnsTable.processed_by, usersTable.id))
     .where(whereClause)
     .orderBy(desc(returnsTable.created_at))
     .limit(limit)
@@ -140,15 +171,20 @@ export class ServiceEngine {
     const countResult = await db.select({ count: sql<number>`count(*)` })
       .from(returnsTable)
       .innerJoin(salesTable, eq(returnsTable.sale_id, salesTable.id))
+      .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
+      .leftJoin(saleItemsTable, eq(returnsTable.sale_item_id, saleItemsTable.id))
+      .leftJoin(productsTable, eq(saleItemsTable.product_id, productsTable.id))
+      .leftJoin(serialItemsTable, eq(returnsTable.serial_item_id, serialItemsTable.id))
+      .leftJoin(usersTable, eq(returnsTable.processed_by, usersTable.id))
       .where(whereClause);
 
-    const count = Number(countResult[0].count);
+    const count = Number(countResult[0]?.count || 0);
 
     return {
       data,
       meta: {
         total_records: count,
-        total_pages: Math.ceil(count / limit),
+        total_pages: Math.ceil(count / limit) || 1,
         current_page: page,
         page_size: limit,
       },
@@ -160,17 +196,17 @@ export class ServiceEngine {
     return await db.transaction(async (tx) => {
       // 1. Fetch sale item & parent sale
       const saleItems = await tx.select().from(saleItemsTable).where(eq(saleItemsTable.id, payload.sale_item_id)).limit(1);
-      if (saleItems.length === 0) throw new Error("Sale item not found");
+      if (saleItems.length === 0) throw new AppError(404, "Sale item not found");
       const saleItem = saleItems[0];
 
       // Check if already returned
       const prevReturn = await tx.select().from(returnsTable).where(eq(returnsTable.sale_item_id, saleItem.id)).limit(1);
       if (prevReturn.length > 0) {
-        throw new Error("This item has already been returned.");
+        throw new AppError(400, "This item has already been returned.");
       }
 
       const sales = await tx.select().from(salesTable).where(eq(salesTable.id, saleItem.sale_id)).limit(1);
-      if (sales.length === 0) throw new Error("Sale not found");
+      if (sales.length === 0) throw new AppError(404, "Sale not found");
       const sale = sales[0];
 
       // Fetch all items on this sale to determine if this is a single-item contract or multi-item partial return
@@ -285,7 +321,7 @@ export class ServiceEngine {
           const safeMaxRefund = Math.min(itemPrice, netCashAvailable);
 
           if (refundAmt > safeMaxRefund) {
-            throw new Error(`Refund amount (Rs. ${refundAmt.toFixed(2)}) exceeds the maximum safe refund limit (Rs. ${safeMaxRefund.toFixed(2)}).`);
+            throw new AppError(400, `Refund amount (Rs. ${refundAmt.toFixed(2)}) exceeds the maximum safe refund limit (Rs. ${safeMaxRefund.toFixed(2)}).`);
           }
 
           if (isFinalItemReturn) {
@@ -376,14 +412,21 @@ export class ServiceEngine {
           }
         }
       } else if (refundAmt > 0) {
-        // Direct cash sale refund
-        const prevReturns = await tx.select().from(returnsTable).where(eq(returnsTable.sale_id, sale.id));
+        // Direct cash sale refund: exclude the newly inserted returnId to avoid double-counting
+        const prevReturns = await tx.select().from(returnsTable).where(
+          and(
+            eq(returnsTable.sale_id, sale.id),
+            ne(returnsTable.id, returnId)
+          )
+        );
         const prevRefundsTotal = prevReturns.reduce((acc, r) => acc + parseFloat(r.refund_amount || "0"), 0);
         const totalSaleCash = parseFloat(sale.total || "0");
         const maxCashRefund = Math.max(0, totalSaleCash - prevRefundsTotal);
+        const itemPrice = parseFloat(saleItem.line_total || "0");
+        const safeMaxRefund = Math.min(itemPrice, maxCashRefund);
 
-        if (refundAmt > maxCashRefund) {
-          throw new Error(`Refund amount (Rs. ${refundAmt.toFixed(2)}) exceeds original cash paid (Rs. ${maxCashRefund.toFixed(2)}).`);
+        if (refundAmt > safeMaxRefund) {
+          throw new AppError(400, `Refund amount (Rs. ${refundAmt.toFixed(2)}) exceeds allowable limit (Rs. ${safeMaxRefund.toFixed(2)}).`);
         }
       }
 
@@ -484,7 +527,7 @@ export class ServiceEngine {
   static async createWarrantyClaim(payload: CreateWarrantyClaimPayload, processedBy: string): Promise<string> {
     // Check the sale item exists and get its serial
     const saleItems = await db.select().from(saleItemsTable).where(eq(saleItemsTable.id, payload.sale_item_id)).limit(1);
-    if (saleItems.length === 0) throw new Error("Sale item not found");
+    if (saleItems.length === 0) throw new AppError(404, "Sale item not found");
     const saleItem = saleItems[0];
 
     const claimId = uuidv7();
@@ -521,7 +564,7 @@ export class ServiceEngine {
 
   static async closeWarrantyClaim(claimId: string, payload: CloseWarrantyClaimPayload): Promise<void> {
     const claims = await db.select().from(warrantyClaimsTable).where(eq(warrantyClaimsTable.id, claimId)).limit(1);
-    if (claims.length === 0) throw new Error("Warranty claim not found");
+    if (claims.length === 0) throw new AppError(404, "Warranty claim not found");
     const claim = claims[0];
 
     await db.transaction(async (tx) => {
@@ -537,7 +580,7 @@ export class ServiceEngine {
       }
 
       if (payload.resolution === "REPLACED") {
-        if (!payload.replacement_serial_id) throw new Error("replacement_serial_id is required for REPLACED resolution");
+        if (!payload.replacement_serial_id) throw new AppError(400, "replacement_serial_id is required for REPLACED resolution");
         setClause.replacement_serial_id = payload.replacement_serial_id;
 
         // Old unit → DEFECTIVE

@@ -100,11 +100,18 @@ export function PayrollReportTab() {
         'Role': r.role,
         'Branch': r.branchName || '-',
         'Direct Sales Count': r.directSalesCount,
-        'Direct Sales Revenue (Rs.)': r.directSalesAmount,
+        'Direct Sales Gross (Rs.)': r.directSalesGrossAmount || r.directSalesAmount,
+        'Direct Refunds Deducted (Rs.)': r.directRefundsAmount || 0,
+        'Net Direct Sales (Rs.)': r.directSalesAmount,
         'Installment Sales Count': r.installmentSalesCount,
-        'Installment Downpayments (Rs.)': r.downpaymentsCollected,
+        'Downpayments Gross (Rs.)': r.downpaymentsGrossAmount || r.downpaymentsCollected,
+        'Downpayments Refunds Deducted (Rs.)': r.downpaymentsRefundAmount || 0,
+        'Net Downpayments (Rs.)': r.downpaymentsCollected,
         'Collections Count': r.receiptsCount,
-        'Installment Collections (Rs.)': r.collectionsAmount,
+        'Collections Gross (Rs.)': r.collectionsGrossAmount || r.collectionsAmount,
+        'Collections Refunds Deducted (Rs.)': r.collectionsRefundAmount || 0,
+        'Net Collections (Rs.)': r.collectionsAmount,
+        'Total Refunds Deducted (Rs.)': r.totalRefundsDeducted || 0,
         'Total Money Handled (Rs.)': r.totalMoneyHandled,
       }));
       exportToExcel(exportRows, 'Payroll_Report');
@@ -134,9 +141,41 @@ export function PayrollReportTab() {
           { header: "Staff Name", accessorKey: "name" },
           { header: "Role", accessorKey: "role" },
           { header: "Branch", accessorKey: "branchName", cell: (r: any) => r.branchName || '-' },
-          { header: "Direct Sales Total", accessorKey: "directSalesAmount", cell: (r: any) => `Rs. ${Number(r.directSalesAmount || 0).toLocaleString('en-GB')}` },
-          { header: "Downpayments Collected", accessorKey: "downpaymentsCollected", cell: (r: any) => `Rs. ${Number(r.downpaymentsCollected || 0).toLocaleString('en-GB')}` },
-          { header: "Installment Collections", accessorKey: "collectionsAmount", cell: (r: any) => `Rs. ${Number(r.collectionsAmount || 0).toLocaleString('en-GB')}` },
+          { 
+            header: "Net Direct Sales", 
+            accessorKey: "directSalesAmount", 
+            cell: (r: any) => {
+              const net = `Rs. ${Number(r.directSalesAmount || 0).toLocaleString('en-GB')}`;
+              return Number(r.directRefundsAmount || 0) > 0 
+                ? `${net} (-Rs. ${Number(r.directRefundsAmount).toLocaleString('en-GB')} ref)`
+                : net;
+            }
+          },
+          { 
+            header: "Net Downpayments", 
+            accessorKey: "downpaymentsCollected", 
+            cell: (r: any) => {
+              const net = `Rs. ${Number(r.downpaymentsCollected || 0).toLocaleString('en-GB')}`;
+              return Number(r.downpaymentsRefundAmount || 0) > 0 
+                ? `${net} (-Rs. ${Number(r.downpaymentsRefundAmount).toLocaleString('en-GB')} ref)`
+                : net;
+            }
+          },
+          { 
+            header: "Net Collections", 
+            accessorKey: "collectionsAmount", 
+            cell: (r: any) => {
+              const net = `Rs. ${Number(r.collectionsAmount || 0).toLocaleString('en-GB')}`;
+              return Number(r.collectionsRefundAmount || 0) > 0 
+                ? `${net} (-Rs. ${Number(r.collectionsRefundAmount).toLocaleString('en-GB')} ref)`
+                : net;
+            }
+          },
+          { 
+            header: "Total Refunds", 
+            accessorKey: "totalRefundsDeducted", 
+            cell: (r: any) => Number(r.totalRefundsDeducted || 0) > 0 ? `-Rs. ${Number(r.totalRefundsDeducted).toLocaleString('en-GB')}` : '-' 
+          },
           { header: "Total Money Handled", accessorKey: "totalMoneyHandled", cell: (r: any) => `Rs. ${Number(r.totalMoneyHandled || 0).toLocaleString('en-GB')}` },
         ],
         printData,
@@ -239,10 +278,15 @@ export function PayrollReportTab() {
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--spacing-4)' }}>
         <div className="glass-panel" style={{ padding: 'var(--spacing-4)', borderRadius: 'var(--border-radius-md)' }}>
-          <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Direct Sales Revenue</div>
+          <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Net Direct Sales Revenue</div>
           <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#3B82F6' }}>
             Rs. {grandTotalDirectSales.toLocaleString('en-GB', { minimumFractionDigits: 2 })}
           </div>
+          {Number(summary?.grandTotalDirectRefunds || 0) > 0 && (
+            <div style={{ fontSize: '11px', color: 'var(--status-error)', marginTop: '2px', fontWeight: 600 }}>
+              (Net of Rs. {Number(summary?.grandTotalDirectRefunds).toLocaleString('en-GB')} Refunds)
+            </div>
+          )}
         </div>
 
         <div className="glass-panel" style={{ padding: 'var(--spacing-4)', borderRadius: 'var(--border-radius-md)' }}>
@@ -250,6 +294,11 @@ export function PayrollReportTab() {
           <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--brand-primary)' }}>
             Rs. {grandTotalDownpayments.toLocaleString('en-GB', { minimumFractionDigits: 2 })}
           </div>
+          {Number(summary?.grandTotalDownpaymentsRefunds || 0) > 0 && (
+            <div style={{ fontSize: '11px', color: 'var(--status-error)', marginTop: '2px', fontWeight: 600 }}>
+              (Net of Rs. {Number(summary?.grandTotalDownpaymentsRefunds).toLocaleString('en-GB')} Refunds)
+            </div>
+          )}
         </div>
 
         <div className="glass-panel" style={{ padding: 'var(--spacing-4)', borderRadius: 'var(--border-radius-md)' }}>
@@ -257,6 +306,11 @@ export function PayrollReportTab() {
           <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#10B981' }}>
             Rs. {grandTotalCollections.toLocaleString('en-GB', { minimumFractionDigits: 2 })}
           </div>
+          {Number(summary?.grandTotalCollectionsRefunds || 0) > 0 && (
+            <div style={{ fontSize: '11px', color: 'var(--status-error)', marginTop: '2px', fontWeight: 600 }}>
+              (Net of Rs. {Number(summary?.grandTotalCollectionsRefunds).toLocaleString('en-GB')} Refunds)
+            </div>
+          )}
         </div>
 
         <div className="glass-panel" style={{ padding: 'var(--spacing-4)', borderRadius: 'var(--border-radius-md)' }}>
@@ -264,6 +318,11 @@ export function PayrollReportTab() {
           <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-primary)' }}>
             Rs. {grandTotalHandled.toLocaleString('en-GB', { minimumFractionDigits: 2 })}
           </div>
+          {Number(summary?.grandTotalRefunds || 0) > 0 && (
+            <div style={{ fontSize: '11px', color: 'var(--status-error)', marginTop: '2px', fontWeight: 600 }}>
+              (Net of Rs. {Number(summary?.grandTotalRefunds).toLocaleString('en-GB')} Total Refunds)
+            </div>
+          )}
         </div>
       </div>
 
@@ -275,9 +334,9 @@ export function PayrollReportTab() {
               <th style={{ padding: '12px 16px' }}>Staff Member</th>
               <th style={{ padding: '12px 16px' }}>Role</th>
               <th style={{ padding: '12px 16px' }}>Branch</th>
-              <th style={{ padding: '12px 16px' }}>Direct Sales (Count & Amount)</th>
-              <th style={{ padding: '12px 16px' }}>Installment Downpayments</th>
-              <th style={{ padding: '12px 16px' }}>Installment Collections</th>
+              <th style={{ padding: '12px 16px' }}>Direct Sales (Net of Refunds)</th>
+              <th style={{ padding: '12px 16px' }}>Downpayments (Net of Refunds)</th>
+              <th style={{ padding: '12px 16px' }}>Collections (Net of Refunds)</th>
               <th style={{ padding: '12px 16px', fontWeight: 700 }}>Total Money Handled</th>
             </tr>
           </thead>
@@ -306,8 +365,16 @@ export function PayrollReportTab() {
                   
                   {/* Direct Sales */}
                   <td style={{ padding: '12px 16px', color: '#3B82F6', fontWeight: 500 }}>
-                    {row.directSalesCount > 0 ? (
-                      <div><strong>Rs. {Number(row.directSalesAmount || 0).toLocaleString('en-GB')}</strong> <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({row.directSalesCount} sales)</span></div>
+                    {row.directSalesCount > 0 || Number(row.directRefundsAmount || 0) > 0 ? (
+                      <div>
+                        <strong>Rs. {Number(row.directSalesAmount || 0).toLocaleString('en-GB')}</strong>{' '}
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({row.directSalesCount || 0} sales)</span>
+                        {Number(row.directRefundsAmount || 0) > 0 && (
+                          <div style={{ fontSize: '11px', color: 'var(--status-error)', marginTop: '2px', fontWeight: 600 }}>
+                            -Rs. {Number(row.directRefundsAmount).toLocaleString('en-GB')} ({row.directRefundsCount || 0} refunds)
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span style={{ color: 'var(--text-secondary)' }}>-</span>
                     )}
@@ -315,8 +382,16 @@ export function PayrollReportTab() {
 
                   {/* Installment Downpayments */}
                   <td style={{ padding: '12px 16px', color: 'var(--brand-primary)', fontWeight: 500 }}>
-                    {row.downpaymentsCollected > 0 ? (
-                      <div><strong>Rs. {Number(row.downpaymentsCollected || 0).toLocaleString('en-GB')}</strong> <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({row.installmentSalesCount} sales)</span></div>
+                    {row.installmentSalesCount > 0 || Number(row.downpaymentsRefundAmount || 0) > 0 ? (
+                      <div>
+                        <strong>Rs. {Number(row.downpaymentsCollected || 0).toLocaleString('en-GB')}</strong>{' '}
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({row.installmentSalesCount || 0} sales)</span>
+                        {Number(row.downpaymentsRefundAmount || 0) > 0 && (
+                          <div style={{ fontSize: '11px', color: 'var(--status-error)', marginTop: '2px', fontWeight: 600 }}>
+                            -Rs. {Number(row.downpaymentsRefundAmount).toLocaleString('en-GB')} refunded
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span style={{ color: 'var(--text-secondary)' }}>-</span>
                     )}
@@ -324,8 +399,16 @@ export function PayrollReportTab() {
 
                   {/* Installment Collections */}
                   <td style={{ padding: '12px 16px', color: '#10B981', fontWeight: 500 }}>
-                    {row.collectionsAmount > 0 ? (
-                      <div><strong>Rs. {Number(row.collectionsAmount || 0).toLocaleString('en-GB')}</strong> <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({row.receiptsCount} receipts)</span></div>
+                    {row.receiptsCount > 0 || Number(row.collectionsRefundAmount || 0) > 0 ? (
+                      <div>
+                        <strong>Rs. {Number(row.collectionsAmount || 0).toLocaleString('en-GB')}</strong>{' '}
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({row.receiptsCount || 0} receipts)</span>
+                        {Number(row.collectionsRefundAmount || 0) > 0 && (
+                          <div style={{ fontSize: '11px', color: 'var(--status-error)', marginTop: '2px', fontWeight: 600 }}>
+                            -Rs. {Number(row.collectionsRefundAmount).toLocaleString('en-GB')} refunded
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span style={{ color: 'var(--text-secondary)' }}>-</span>
                     )}
@@ -333,7 +416,12 @@ export function PayrollReportTab() {
 
                   {/* Total Money Handled */}
                   <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: '0.95rem' }}>
-                    Rs. {Number(row.totalMoneyHandled || 0).toLocaleString('en-GB')}
+                    <div>Rs. {Number(row.totalMoneyHandled || 0).toLocaleString('en-GB')}</div>
+                    {Number(row.totalRefundsDeducted || 0) > 0 && (
+                      <div style={{ fontSize: '11px', color: 'var(--status-error)', fontWeight: 600, marginTop: '2px' }}>
+                        -Rs. {Number(row.totalRefundsDeducted).toLocaleString('en-GB')} Total Refunds
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))

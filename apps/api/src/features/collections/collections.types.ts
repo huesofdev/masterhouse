@@ -4,6 +4,8 @@ export const createAdjustmentSchema = z.object({
   type: z.enum(["DISCOUNT", "WRITE_OFF", "PENALTY", "REBATE"]),
   amount: z.number().positive(),
   reason: z.string().min(3).max(255),
+  schedule_id: z.string().uuid().optional(),
+  scope: z.enum(["SCHEDULE", "CONTRACT"]).optional(),
 });
 
 export type CreateAdjustmentPayload = z.infer<typeof createAdjustmentSchema>;

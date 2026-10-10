@@ -2,6 +2,9 @@ export interface PrintColumn {
   header: string;
   accessorKey?: string;
   cell?: (item: any) => string | number;
+  width?: string;
+  align?: 'left' | 'center' | 'right';
+  nowrap?: boolean;
 }
 
 export interface PrintOptions {
@@ -50,13 +53,25 @@ export function printReportDocument(
       } else if (col.accessorKey) {
         val = item[col.accessorKey] != null ? String(item[col.accessorKey]) : '-';
       }
-      rowHtml += `<td>${val}</td>`;
+      const style = [
+        col.width ? `width: ${col.width}` : '',
+        col.align ? `text-align: ${col.align}` : '',
+        col.nowrap ? 'white-space: nowrap' : ''
+      ].filter(Boolean).join('; ');
+      rowHtml += `<td${style ? ` style="${style}"` : ''}>${val}</td>`;
     });
     rowHtml += '</tr>';
     return rowHtml;
   }).join('');
 
-  let tableHeadersHtml = columns.map(col => `<th>${col.header}</th>`).join('');
+  let tableHeadersHtml = columns.map(col => {
+    const style = [
+      col.width ? `width: ${col.width}` : '',
+      col.align ? `text-align: ${col.align}` : '',
+      col.nowrap ? 'white-space: nowrap' : ''
+    ].filter(Boolean).join('; ');
+    return `<th${style ? ` style="${style}"` : ''}>${col.header}</th>`;
+  }).join('');
 
   const html = `
     <!DOCTYPE html>

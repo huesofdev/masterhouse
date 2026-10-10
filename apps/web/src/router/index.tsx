@@ -60,6 +60,7 @@ import { TaxReportPage } from '../features/reports/pages/TaxReportPage';
 import { ProductPerformanceReportPage } from '../features/reports/pages/ProductPerformanceReportPage';
 import { BookingsReportPage } from '../features/reports/pages/BookingsReportPage';
 import { PayrollReportPage } from '../features/reports/pages/PayrollReportPage';
+import { RefundsReportPage } from '../features/reports/pages/RefundsReportPage';
 import { SerialLifecycleReportPage } from '../features/reports/pages/SerialLifecycleReportPage';
 import { SMSLogsPage } from '../features/communications/pages/SMSLogsPage';
 import { DashboardPage } from '../features/dashboard/pages/DashboardPage';
@@ -304,6 +305,10 @@ const router = createBrowserRouter([
           {
             path: '/reports/payroll',
             element: <PayrollReportPage />,
+          },
+          {
+            path: '/reports/refunds',
+            element: <RefundsReportPage />,
           },
           {
             path: '/reports/serials',

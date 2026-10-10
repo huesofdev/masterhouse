@@ -26,7 +26,7 @@ export class CustomersService {
       .limit(20);
   }
 
-  static async listCustomers(branchId: string, page: number = 1, limit: number = 100, search: string = '', routeId?: string, activeStatus: string = 'ALL') {
+  static async listCustomers(branchId: string, page: number = 1, limit: number = 100, search: string = '', routeId?: string, activeStatus: string = 'ALL', contractCount?: string) {
     const offset = (page - 1) * limit;
     
     const conditions = [eq(customersTable.branch_id, branchId)];
@@ -69,6 +69,21 @@ export class CustomersService {
             )
         ) as any
       );
+    }
+
+    if (contractCount && contractCount !== 'ALL') {
+      if (contractCount === '10+') {
+        conditions.push(
+          sql`(SELECT COUNT(*) FROM ${installmentContractsTable} WHERE ${installmentContractsTable.customer_id} = ${customersTable.id} AND ${installmentContractsTable.status} = 'ACTIVE') >= 10` as any
+        );
+      } else {
+        const countNum = parseInt(contractCount, 10);
+        if (!isNaN(countNum)) {
+          conditions.push(
+            sql`(SELECT COUNT(*) FROM ${installmentContractsTable} WHERE ${installmentContractsTable.customer_id} = ${customersTable.id} AND ${installmentContractsTable.status} = 'ACTIVE') = ${countNum}` as any
+          );
+        }
+      }
     }
 
     const whereClause = and(...conditions);
@@ -393,24 +408,31 @@ export class CustomersService {
       { header: 'Guarantor NIC', key: 'guarantorNic', width: 20 },
       { header: 'Downpayment (Rs)', key: 'downpayment', width: 20 },
       { header: 'Total Payable (Rs)', key: 'payable', width: 20 },
-      { header: 'Pending Balance (Rs)', key: 'balance', width: 20 },
+      { header: 'Collected (Rs)', key: 'collected', width: 20 },
+      { header: 'Remaining Balance (Rs)', key: 'balance', width: 20 },
       { header: 'Overdue (Rs)', key: 'overdue', width: 20 },
       { header: 'Penalty Included (Rs)', key: 'penalty', width: 22 }
     ];
     contractsSheet.getRow(1).font = { bold: true };
     contractsSheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
     
-    contractsSheet.addRows(contracts.map(c => ({
-      date: new Date(c.created_at).toLocaleDateString('en-GB'),
-      status: c.status,
-      guarantorName: c.guarantor ? c.guarantor.full_name : '-',
-      guarantorNic: c.guarantor ? c.guarantor.nic : '-',
-      downpayment: Number(c.downpayment || 0).toLocaleString('en-GB'),
-      payable: Number(c.total_payable).toLocaleString('en-GB'),
-      balance: Number(c.balance).toLocaleString('en-GB'),
-      overdue: Number(c.overdue_amount || 0).toLocaleString('en-GB'),
-      penalty: Number(c.penalty_amount || 0).toLocaleString('en-GB')
-    })));
+    contractsSheet.addRows(contracts.map(c => {
+      const payable = Number(c.total_payable);
+      const balance = Math.max(0, Number(c.balance));
+      const collected = Math.max(0, payable - balance);
+      return {
+        date: new Date(c.created_at).toLocaleDateString('en-GB'),
+        status: c.status,
+        guarantorName: c.guarantor ? c.guarantor.full_name : '-',
+        guarantorNic: c.guarantor ? c.guarantor.nic : '-',
+        downpayment: Number(c.downpayment || 0).toLocaleString('en-GB'),
+        payable: payable.toLocaleString('en-GB'),
+        collected: collected.toLocaleString('en-GB'),
+        balance: balance.toLocaleString('en-GB'),
+        overdue: Number(c.overdue_amount || 0).toLocaleString('en-GB'),
+        penalty: Number(c.penalty_amount || 0).toLocaleString('en-GB')
+      };
+    }));
 
     return workbook.xlsx.writeBuffer();
   }

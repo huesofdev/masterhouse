@@ -289,11 +289,13 @@ export class SalesService {
       serialItem: serialItemsTable,
       product: productsTable,
       brand: brandsTable,
+      category: categoriesTable,
       unit_cost: intakeItemsTable.unit_cost,
     })
     .from(serialItemsTable)
     .innerJoin(productsTable, eq(serialItemsTable.product_id, productsTable.id))
     .leftJoin(brandsTable, eq(productsTable.brand_id, brandsTable.id))
+    .leftJoin(categoriesTable, eq(productsTable.category_id, categoriesTable.id))
     .innerJoin(warehousesTable, eq(serialItemsTable.warehouse_id, warehousesTable.id))
     .leftJoin(intakeItemsTable, eq(serialItemsTable.intake_item_id, intakeItemsTable.id))
     .where(
@@ -309,6 +311,9 @@ export class SalesService {
       if (match.brand) {
         (match.product as any).brand = match.brand;
       }
+      if (match.category) {
+        (match.product as any).category = match.category;
+      }
       if (match.product.image_url) {
         (match.product as any).image_signed_url = await S3Util.getSignedDownloadUrl(match.product.image_url, 604800);
       }
@@ -320,12 +325,14 @@ export class SalesService {
     const productMatchesRaw = await db.select({
       product: productsTable,
       brand: brandsTable,
+      category: categoriesTable,
       available_quantity: inventoryBalancesTable.quantity,
       warehouse_id: warehousesTable.id,
       warehouse_name: warehousesTable.name,
     })
     .from(productsTable)
     .leftJoin(brandsTable, eq(productsTable.brand_id, brandsTable.id))
+    .leftJoin(categoriesTable, eq(productsTable.category_id, categoriesTable.id))
     .leftJoin(inventoryBalancesTable, eq(productsTable.id, inventoryBalancesTable.product_id))
     .leftJoin(warehousesTable, eq(inventoryBalancesTable.warehouse_id, warehousesTable.id))
     .where(
@@ -365,6 +372,9 @@ export class SalesService {
         const pCopy = { ...row.product } as any;
         if (row.brand) {
           pCopy.brand = row.brand;
+        }
+        if (row.category) {
+          pCopy.category = row.category;
         }
 
         productMap.set(row.product.id, {

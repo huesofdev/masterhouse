@@ -24,7 +24,7 @@ export function useCreateAdjustment() {
   const queryClient = useQueryClient();
   const activeBranchId = useBranchStore(state => state.activeBranchId);
   return useMutation({
-    mutationFn: async (payload: { contract_id: string; type: string; amount: number; reason: string }) => {
+    mutationFn: async (payload: { contract_id: string; type: string; amount: number; reason: string; schedule_id?: string; scope?: 'SCHEDULE' | 'CONTRACT' }) => {
       const res = await api.post(`/collections/contracts/${payload.contract_id}/adjustments`, payload, {
         headers: { 'x-branch-id': activeBranchId }
       });
@@ -91,6 +91,71 @@ export function useGetContractHistory(contractId: string) {
     queryKey: ['contract-history', contractId],
     queryFn: async () => {
       const res = await api.get(`/collections/contracts/${contractId}/history`);
+      return res.data.data;
+    },
+    enabled: !!contractId,
+  });
+}
+
+export interface ContractBreakdownSchedule {
+  id: string;
+  installment_number: number;
+  due_date: string;
+  amount_due: number;
+  amount_paid: number;
+  balance_remaining: number;
+  status: 'PENDING' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE';
+  is_overdue: boolean;
+  days_overdue: number;
+}
+
+export interface ContractBreakdownAdjustment {
+  id: string;
+  type: 'PENALTY' | 'DISCOUNT' | 'WRITE_OFF' | 'REBATE';
+  amount: number;
+  reason: string;
+  created_at: string;
+  created_by: string;
+  created_by_name: string;
+}
+
+export interface ContractBreakdownData {
+  contract: {
+    id: string;
+    contract_no: string;
+    status: string;
+    total_payable: number;
+    collected_amount: number;
+    balance: number;
+    downpayment_amount: number;
+    installment_amount: number;
+    terms_months: number;
+    scheme_name: string;
+    customer_name: string;
+    customer_nic: string;
+    customer_mobile: string;
+  };
+  summary: {
+    overdue_amount: number;
+    overdue_count: number;
+    total_penalties: number;
+    total_discounts: number;
+    total_write_offs: number;
+    total_rebates: number;
+    total_due: number;
+    total_paid: number;
+    remaining_balance: number;
+    is_settled: boolean;
+  };
+  schedules: ContractBreakdownSchedule[];
+  adjustments: ContractBreakdownAdjustment[];
+}
+
+export function useGetContractBreakdown(contractId: string | null) {
+  return useQuery<ContractBreakdownData>({
+    queryKey: ['contract-breakdown', contractId],
+    queryFn: async () => {
+      const res = await api.get(`/collections/contracts/${contractId}/breakdown`);
       return res.data.data;
     },
     enabled: !!contractId,

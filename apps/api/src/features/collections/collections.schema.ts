@@ -116,6 +116,12 @@ export const installmentContractsRelations = relations(installmentContractsTable
   schedules: many(installmentSchedulesTable),
   receipts: many(collectionReceiptsTable),
   attempts: many(collectionAttemptsTable),
+  adjustments: many(contractAdjustmentsTable),
+}));
+
+export const contractAdjustmentsRelations = relations(contractAdjustmentsTable, ({ one }) => ({
+  contract: one(installmentContractsTable, { fields: [contractAdjustmentsTable.contract_id], references: [installmentContractsTable.id] }),
+  creator: one(usersTable, { fields: [contractAdjustmentsTable.created_by], references: [usersTable.id] }),
 }));
 
 export const installmentSchedulesRelations = relations(installmentSchedulesTable, ({ one }) => ({

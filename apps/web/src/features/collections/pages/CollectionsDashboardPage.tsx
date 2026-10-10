@@ -1,16 +1,20 @@
 import { useState, useMemo } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { useNavigate } from 'react-router-dom';
-import { useCollectionSchedules, useGetContractHistory, useScheduleCounts } from '../api';
+import { useCollectionSchedules, useScheduleCounts } from '../api';
 import { useRoutes } from '../../routes/api';
 import { ReceivePaymentModal } from '../components/ReceivePaymentModal';
 import { ContractAdjustmentModal } from '../components/ContractAdjustmentModal';
-import { Calendar, AlertCircle, Clock, Filter, Map, Package, CheckCircle2, History, X, Printer } from 'lucide-react';
+import { ReceiptHistoryModal } from '../components/ReceiptHistoryModal';
+import { Calendar, AlertCircle, Clock, Filter, Map, Package, CheckCircle2, History, Printer } from 'lucide-react';
 import { DataTable } from '../../../components/DataTable';
-import { apiClient as api } from '../../../lib/axios';
 import { PermissionGuard } from '../../../components/PermissionGuard';
 import { useAuth } from '../../../hooks/useAuth';
 import { useTableUrlState } from '../../../hooks/useTableUrlState';
+import { useBranchStore } from '../../../hooks/useBranchStore';
+import { useBranches } from '../../branches/api';
+import { printReportDocument, formatDateGB } from '../../../lib/printReport';
+import { apiClient as api } from '../../../lib/axios';
 
 export function CollectionsDashboardPage() {
   const {
@@ -199,7 +203,20 @@ export function CollectionsDashboardPage() {
                   <button 
                     onClick={(e) => {
                       e.stopPropagation();
-                      setAdjustingContract({ id: row.original.contract_id, balance: row.original.contract_balance, status: row.original.contract_status, dueAmount: due });
+                      setAdjustingContract({ 
+                        id: row.original.contract_id, 
+                        balance: row.original.contract_balance, 
+                        status: row.original.contract_status, 
+                        dueAmount: due,
+                        schedule: {
+                          id: row.original.schedule_id,
+                          installment_number: row.original.installment_number,
+                          due_date: row.original.due_date,
+                          amount_due: row.original.amount_due,
+                          amount_paid: row.original.amount_paid,
+                          dueAmount: due,
+                        }
+                      });
                     }}
                     style={{ padding: '8px 12px', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
                   >
@@ -213,6 +230,145 @@ export function CollectionsDashboardPage() {
       },
     }
   ], [activeTab, navigate]);
+
+  const activeBranchId = useBranchStore(state => state.activeBranchId);
+  const { data: branches } = useBranches();
+  const activeBranch = branches?.find((b: any) => b.id === activeBranchId);
+  const [isPrinting, setIsPrinting] = useState(false);
+
+  const handlePrintCustomRangeSheet = async () => {
+    setIsPrinting(true);
+    try {
+      const res = await api.get('/collections/schedules', {
+        headers: { 'x-branch-id': activeBranchId },
+        params: {
+          filter: 'custom',
+          page: 1,
+          limit: 5000,
+          search: search || undefined,
+          routeId: routeId || undefined,
+          areaId: areaId || undefined,
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+          status: status !== 'PENDING_OVERDUE' ? status : undefined,
+        }
+      });
+
+      const fullData = res.data?.data || [];
+      const fullMeta = res.data?.meta;
+
+      if (!fullData || fullData.length === 0) {
+        alert("No schedules found matching the selected custom range filters.");
+        return;
+      }
+
+      const statusLabels: Record<string, string> = {
+        'PENDING_OVERDUE': 'All Unpaid (Pending, Overdue, Partial)',
+        'OVERDUE': 'Overdue Only',
+        'PENDING': 'Pending Only',
+        'PARTIALLY_PAID': 'Partially Paid Only',
+        'PAID': 'Paid Only',
+        'ALL': 'All Statuses'
+      };
+
+      const selectedArea = selectedRouteAreas.find((a: any) => a.id === areaId);
+      const filterParts: string[] = [];
+      if (activeBranch?.name) filterParts.push(`Branch: ${activeBranch.name}`);
+      if (selectedRoute?.name) filterParts.push(`Route: ${selectedRoute.name}`);
+      if (selectedArea?.name) filterParts.push(`Area: ${selectedArea.name}`);
+      if (startDate || endDate) {
+        filterParts.push(`Date Range: ${startDate ? formatDateGB(startDate) : 'Start'} to ${endDate ? formatDateGB(endDate) : 'End'}`);
+      } else {
+        filterParts.push('Date Range: All Dates');
+      }
+      filterParts.push(`Status: ${statusLabels[status] || status}`);
+      if (search) filterParts.push(`Search: "${search}"`);
+      if (fullMeta?.total_pending_amount != null) {
+        filterParts.push(`Total Pending: Rs. ${Number(fullMeta.total_pending_amount).toLocaleString('en-GB', { minimumFractionDigits: 2 })}`);
+      }
+      if (fullMeta?.total_paid_amount != null && (status === 'PAID' || status === 'ALL')) {
+        filterParts.push(`Total Collected: Rs. ${Number(fullMeta.total_paid_amount).toLocaleString('en-GB', { minimumFractionDigits: 2 })}`);
+      }
+
+      const columns = [
+        {
+          header: '#',
+          cell: (item: any) => item._index || '-',
+          width: '56px',
+          align: 'center' as const,
+          nowrap: true
+        },
+        {
+          header: 'Customer',
+          cell: (item: any) => item.customer_name || '-',
+          width: '20%'
+        },
+        {
+          header: 'Mobile',
+          cell: (item: any) => item.customer_mobile || '-',
+          width: '11%',
+          align: 'center' as const,
+          nowrap: true
+        },
+        {
+          header: 'Address',
+          cell: (item: any) => item.customer_address || '-',
+          width: '25%'
+        },
+        {
+          header: 'Product / Agreement',
+          cell: (item: any) => {
+            const prod = item.product_name || 'Item';
+            const inst = Number(item.installment_number) === 0 ? 'DP Recovery' : `#${item.installment_number}`;
+            return `${prod} (${inst})`;
+          },
+          width: '14%'
+        },
+        {
+          header: 'Due Date',
+          cell: (item: any) => item.due_date ? formatDateGB(item.due_date) : '-',
+          width: '10%',
+          align: 'center' as const,
+          nowrap: true
+        },
+        {
+          header: 'Pending (Rs.)',
+          cell: (item: any) => {
+            const due = Math.max(0, parseFloat(item.amount_due || 0) - parseFloat(item.amount_paid || 0));
+            return due.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          },
+          width: '10%',
+          align: 'right' as const,
+          nowrap: true
+        },
+        {
+          header: 'Contract Bal. (Rs.)',
+          cell: (item: any) => {
+            const bal = parseFloat(item.contract_balance || 0);
+            return bal.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          },
+          width: '10%',
+          align: 'right' as const,
+          nowrap: true
+        }
+      ];
+
+      const indexedData = fullData.map((item: any, i: number) => ({ ...item, _index: i + 1 }));
+
+      printReportDocument(
+        'COLLECTIONS RUN SHEET (CUSTOM RANGE)',
+        filterParts.join(' | '),
+        columns,
+        indexedData,
+        { orientation: 'landscape' }
+      );
+    } catch (err: any) {
+      console.error('Failed to print collection sheet:', err);
+      alert(err.response?.data?.message || err.message || 'Failed to generate print sheet.');
+    } finally {
+      setIsPrinting(false);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-4)' }}>
@@ -345,14 +501,17 @@ export function CollectionsDashboardPage() {
         )}
 
         {activeTab === 'custom' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '140px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '200px' }}>
             <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Payment Status</label>
             <select 
               className="input-field" 
               value={status} 
               onChange={(e) => setFilters({ status: e.target.value })}
             >
-              <option value="PENDING_OVERDUE">Pending & Overdue</option>
+              <option value="PENDING_OVERDUE">All Unpaid (Pending, Overdue, Partial)</option>
+              <option value="OVERDUE">Overdue Only</option>
+              <option value="PENDING">Pending Only</option>
+              <option value="PARTIALLY_PAID">Partially Paid Only</option>
               <option value="PAID">Paid Only</option>
               <option value="ALL">All Statuses</option>
             </select>
@@ -369,6 +528,34 @@ export function CollectionsDashboardPage() {
               <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>End Date</label>
               <input type="date" className="input-field" value={endDate} onChange={(e) => setFilters({ endDate: e.target.value })} />
             </div>
+            
+            <div style={{ display: 'flex', alignItems: 'flex-end', marginLeft: 'auto' }}>
+              <button
+                type="button"
+                onClick={handlePrintCustomRangeSheet}
+                disabled={isPrinting || (meta?.total_records ?? 0) === 0}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 18px',
+                  background: 'var(--brand-primary)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: (isPrinting || (meta?.total_records ?? 0) === 0) ? 'not-allowed' : 'pointer',
+                  opacity: (isPrinting || (meta?.total_records ?? 0) === 0) ? 0.6 : 1,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Print unpaginated collection run sheet or export to PDF"
+              >
+                <Printer size={16} />
+                <span>{isPrinting ? 'Preparing Sheet...' : 'Print Sheet (PDF)'}</span>
+              </button>
+            </div>
           </>
         )}
       </div>
@@ -379,8 +566,25 @@ export function CollectionsDashboardPage() {
           <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
             Custom Range Summary: <strong style={{ color: 'var(--text-primary)' }}>{meta.total_records}</strong> schedules across <strong style={{ color: 'var(--text-primary)' }}>{meta.unique_customers_count || 0}</strong> accounts
           </div>
-          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--brand-primary)' }}>
-            Total Pending: Rs. {(meta.total_pending_amount || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {status === 'PAID' ? (
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#10b981' }}>
+                Total Collected: Rs. {(meta.total_paid_amount || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            ) : status === 'ALL' ? (
+              <>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--brand-primary)' }}>
+                  Total Pending: Rs. {(meta.total_pending_amount || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: '#10b981' }}>
+                  Total Collected: Rs. {(meta.total_paid_amount || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--brand-primary)' }}>
+                Total Pending: Rs. {(meta.total_pending_amount || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -575,174 +779,3 @@ function TabButton({ active, onClick, icon, label, color, count }: { active: boo
   );
 }
 
-function ReceiptHistoryModal({ contractId, customerLat, customerLng, onClose }: { contractId: string, customerLat?: string | null, customerLng?: string | null, onClose: () => void }) {
-  const { data: history, isLoading } = useGetContractHistory(contractId);
-  const [printingId, setPrintingId] = useState<string | null>(null);
-
-  const handlePrint = async (receiptId: string) => {
-    setPrintingId(receiptId);
-    try {
-      const res = await api.get(`/collections/receipts/${receiptId}/print`);
-      const p = res.data.data;
-      
-      const html = `
-        <html>
-          <head>
-            <style>
-              @page { margin: 0; }
-              body {
-                font-family: monospace;
-                font-size: 14px;
-                width: 300px;
-                margin: 0;
-                padding: 10px;
-                color: #000;
-                font-weight: bold;
-              }
-              .center { text-align: center; }
-              .bold { font-weight: bold; }
-              .logo { max-width: 150px; max-height: 80px; margin: 0 auto 10px; display: block; }
-              table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; color: #000; font-weight: bold; }
-              td { padding: 2px 0; vertical-align: top; color: #000; font-weight: bold; }
-              .divider { border-bottom: 2px dashed #000; margin: 10px 0; }
-              .amt { text-align: right; }
-              .header { margin-bottom: 15px; }
-              .footer { margin-top: 20px; text-align: center; font-size: 12px; }
-            </style>
-          </head>
-          <body>
-            <div class="header center">
-              ${p.company_logo ? `<img src="${p.company_logo}" class="logo" />` : ''}
-              <div class="bold" style="font-size: 18px;">${p.company_name || 'Company Name'}</div>
-              ${p.branch_address ? `<div>${p.branch_address}</div>` : ''}
-              ${p.branch_phone ? `<div>Tel: ${p.branch_phone}</div>` : ''}
-            </div>
-            
-            <div class="center bold" style="font-size: 16px; margin-bottom: 10px;">PAYMENT RECEIPT</div>
-            
-            <div>Date: ${new Date(p.created_at).toLocaleString('en-GB')}</div>
-            <div>Receipt #: ${p.receipt_no}</div>
-            <div>Customer: ${p.customer_name}</div>
-            <div>Item: ${p.product_name}</div>
-            
-            <div class="divider"></div>
-            
-            <table>
-              <tr>
-                <td>Amount Paid:</td>
-                <td class="amt bold">${parseFloat(p.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-              </tr>
-              <tr>
-                <td>Payment Mode:</td>
-                <td class="amt">${p.payment_mode}</td>
-              </tr>
-            </table>
-            
-            <div class="divider"></div>
-            
-            <table>
-              <tr>
-                <td>Total Pending:</td>
-                <td class="amt bold">${parseFloat(p.contract_balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-              </tr>
-              <tr>
-                <td>Next Due Date:</td>
-                <td class="amt">${p.next_due_date}</td>
-              </tr>
-              <tr>
-                <td>Next Amount:</td>
-                <td class="amt">${parseFloat(p.next_due_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-              </tr>
-            </table>
-
-            <div class="divider"></div>
-            
-            <div class="footer">
-              Collected by: ${p.collected_by_name}<br/>
-              Thank you for your payment!<br/>
-              Please retain this receipt.
-            </div>
-          </body>
-        </html>
-      `;
-
-      const printWindow = window.open('', '_blank', 'width=400,height=600');
-      if (printWindow) {
-        printWindow.document.write(html);
-        printWindow.document.close();
-        printWindow.focus();
-        setTimeout(() => {
-          printWindow.print();
-          printWindow.close();
-        }, 500);
-      }
-    } catch (e: any) {
-      alert("Failed to print: " + (e.response?.data?.message || e.message));
-    } finally {
-      setPrintingId(null);
-    }
-  };
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-      <div style={{ width: '500px', maxHeight: '80vh', background: 'var(--bg-primary)', borderRadius: '16px', border: '1px solid var(--border-color)', boxShadow: '0 24px 48px rgba(0,0,0,0.4)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-tertiary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ fontSize: '18px', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <History size={20} color="var(--brand-primary)" /> Collection History
-          </h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-            <X size={20} />
-          </button>
-        </div>
-
-        <div style={{ padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {isLoading ? (
-            <div style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>Loading history...</div>
-          ) : !history || history.length === 0 ? (
-            <div style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No history found.</div>
-          ) : (
-            history.map((event: any) => (
-              <div key={event.id} style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                  <div>
-                    <span style={{ fontWeight: 600, color: event.type === 'RECEIPT' || event.status === 'COLLECTED' ? 'var(--brand-primary)' : 'var(--danger-color)' }}>
-                      {event.type === 'RECEIPT' ? `Receipt (Rs. ${event.amount})` : `Attempt: ${event.status}`}
-                    </span>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                      {new Date(event.date).toLocaleString('en-GB')} • By {event.user}
-                      {event.offline_receipt_number && <span style={{ fontFamily: 'monospace', marginLeft: '6px', color: 'var(--text-muted)' }}>[Offline Ref: {event.offline_receipt_number}]</span>}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    {event.gps_lat && event.gps_lng && event.gps_lat !== 'null' && event.gps_lng !== 'null' && (
-                      <a 
-                        href={`https://www.google.com/maps/dir/?api=1&origin=${event.gps_lat},${event.gps_lng}&destination=${(customerLat && customerLat !== 'null') ? customerLat : event.gps_lat},${(customerLng && customerLng !== 'null') ? customerLng : event.gps_lng}&travelmode=driving`}
-                        target="_blank" rel="noopener noreferrer"
-                        style={{ padding: '6px 12px', background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6', textDecoration: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}
-                      >
-                        <Map size={14} /> Deviation Route
-                      </a>
-                    )}
-                    {event.type === 'RECEIPT' && (
-                      <button 
-                        onClick={() => handlePrint(event.id)}
-                        disabled={printingId === event.id}
-                        style={{ padding: '6px 12px', background: 'var(--brand-primary)', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: printingId === event.id ? 0.7 : 1 }}
-                      >
-                        <Printer size={14} /> {printingId === event.id ? 'Printing...' : 'Print Bill'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
-                  {event.remarks}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}

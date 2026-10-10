@@ -1227,6 +1227,7 @@ export class OperationsService {
         const { installmentSchedulesTable, collectionAttemptsTable } = await import("../collections/collections.schema");
         const { saleItemsTable } = await import("../sale/sales.schema");
         const { productsTable } = await import("../products/products.schema");
+        const { guarantorsTable } = await import("../customers/customers.schema");
         
         const futureDate = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Colombo" }));
         futureDate.setDate(futureDate.getDate() + 180);
@@ -1242,7 +1243,8 @@ export class OperationsService {
         
         const saleItems = await db.select({
           sale_id: saleItemsTable.sale_id,
-          product_name: productsTable.name
+          product_name: productsTable.name,
+          quantity: saleItemsTable.quantity,
         })
         .from(saleItemsTable)
         .innerJoin(productsTable, eq(saleItemsTable.product_id, productsTable.id))
@@ -1250,8 +1252,21 @@ export class OperationsService {
 
         const saleProductsMap: Record<string, string> = {};
         for (const item of saleItems) {
-           saleProductsMap[item.sale_id] = item.product_name; 
+           const itemLabel = item.quantity > 1 ? `${item.product_name} (x${item.quantity})` : item.product_name;
+           if (!saleProductsMap[item.sale_id]) {
+             saleProductsMap[item.sale_id] = itemLabel;
+           } else {
+             saleProductsMap[item.sale_id] += ` + ${itemLabel}`;
+           }
         }
+
+        // Fetch guarantor details for these contracts
+        const guarantorIds = Array.from(new Set(activeContracts.map(c => c.guarantor_id).filter(Boolean))) as string[];
+        let guarantorsList: any[] = [];
+        if (guarantorIds.length > 0) {
+          guarantorsList = await db.select().from(guarantorsTable).where(inArray(guarantorsTable.id, guarantorIds));
+        }
+        const guarantorMap: Record<string, any> = Object.fromEntries(guarantorsList.map(g => [g.id, g]));
 
         const pastAttempts = await db.select({
            contract_id: collectionAttemptsTable.contract_id,
@@ -1281,10 +1296,15 @@ export class OperationsService {
            }
            
            if (contractSchedules.length > 0) {
+             const g = contract.guarantor_id ? guarantorMap[contract.guarantor_id] : null;
              finalContracts.push({
                ...contract,
                current_due: currentDue,
                product_name: saleProductsMap[contract.sale_id] || "Product",
+               guarantor_name: g?.full_name || null,
+               guarantor_phone: g?.mobile || null,
+               guarantor_nic: g?.nic || null,
+               guarantor_address: g?.address || null,
                schedules: contractSchedules,
                past_attempts: attemptsMap[contract.id] || []
              });

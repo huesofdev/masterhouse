@@ -1,10 +1,11 @@
-import { eq, and, asc, isNull, or, isNotNull, gte, lte } from "drizzle-orm";
+import { eq, and, asc, desc, isNull, or, isNotNull, gte, lte } from "drizzle-orm";
 import { v7 as uuidv7 } from "uuid";
 import { db } from "../../db";
 import { installmentContractsTable, installmentSchedulesTable, contractAdjustmentsTable, installmentSchemesTable, collectionReceiptsTable, collectionAttemptsTable } from "./collections.schema";
 import { tripsTable } from "../operations/operations.schema";
 import { CreateAdjustmentPayload, CreateSchemePayload, UpdateSchemePayload, CreateReceiptPayload, CreateAttemptPayload } from "./collections.types";
 import { customersTable } from "../customers/customers.schema";
+import { usersTable } from "../user/user.schema";
 import { routesTable } from "../routes/routes.schema";
 import { warrantyClaimsTable } from "../service/service.schema";
 import { saleItemsTable } from "../sale/sales.schema";
@@ -256,6 +257,7 @@ export class CollectionsService {
       customer_id: customersTable.id,
       customer_name: customersTable.full_name,
       customer_mobile: customersTable.mobile,
+      customer_address: customersTable.address,
       customer_route: routesTable.name,
       route_id: customersTable.route_id,
       area_id: customersTable.area_id,
@@ -303,16 +305,26 @@ export class CollectionsService {
     const lowerSearch = search.toLowerCase();
 
     const filtered = allSchedules.filter(s => {
+      const sDate = typeof s.due_date === 'string' ? s.due_date : formatDateStr(s.due_date);
+
       // Status Filter Logic based on Tab
       if (filter === 'paid') {
         if (s.status !== 'PAID' && s.status !== 'WAIVED') return false;
       } else if (filter === 'custom') {
         if (statusFilter === 'PAID') {
           if (s.status !== 'PAID' && s.status !== 'WAIVED') return false;
+        } else if (statusFilter === 'PARTIALLY_PAID') {
+          if (s.status !== 'PARTIALLY_PAID') return false;
+        } else if (statusFilter === 'OVERDUE') {
+          // Overdue only: due date has passed and not fully paid/waived
+          if (s.status === 'PAID' || s.status === 'WAIVED' || sDate >= todayStr) return false;
+        } else if (statusFilter === 'PENDING') {
+          // Pending only: due today or future, and purely pending (unpaid)
+          if (s.status !== 'PENDING' || sDate < todayStr) return false;
         } else if (statusFilter === 'ALL') {
           // Show everything
         } else {
-          // Default: Pending & Overdue
+          // Default: All Unpaid (Pending, Overdue, Partially Paid)
           if (s.status === "PAID" || s.status === "WAIVED") return false;
         }
       } else {
@@ -320,13 +332,15 @@ export class CollectionsService {
         if (s.status === "PAID" || s.status === "WAIVED") return false;
       }
       
-      const sDate = typeof s.due_date === 'string' ? s.due_date : formatDateStr(s.due_date);
-      
       // Date Filter Logic based on Tab
       let dateMatch = true;
       if (filter === 'custom') {
         if (startDate && endDate) {
           dateMatch = sDate >= startDate && sDate <= endDate;
+        } else if (startDate) {
+          dateMatch = sDate >= startDate;
+        } else if (endDate) {
+          dateMatch = sDate <= endDate;
         }
       } else if (filter === 'today') {
         dateMatch = sDate === todayStr;
@@ -335,7 +349,6 @@ export class CollectionsService {
       } else if (filter === 'upcoming') {
         dateMatch = sDate > todayStr;
       } else if (filter === 'paid') {
-        // Paid tab usually shows all paid ones, or we can leave dateMatch = true.
         dateMatch = true;
       }
       
@@ -346,10 +359,11 @@ export class CollectionsService {
         const productName = saleProductsMap[s.sale_id] || "";
         const nameMatch = s.customer_name?.toLowerCase().includes(lowerSearch) || false;
         const mobileMatch = s.customer_mobile?.toLowerCase().includes(lowerSearch) || false;
+        const addressMatch = s.customer_address?.toLowerCase().includes(lowerSearch) || false;
         const routeMatch = s.customer_route?.toLowerCase().includes(lowerSearch) || false;
         const productMatch = productName.toLowerCase().includes(lowerSearch) || false;
         
-        if (!nameMatch && !mobileMatch && !routeMatch && !productMatch) return false;
+        if (!nameMatch && !mobileMatch && !addressMatch && !routeMatch && !productMatch) return false;
       }
 
       return true;
@@ -392,106 +406,190 @@ export class CollectionsService {
       const contract = contractResults[0];
       if (!contract || contract.status !== "ACTIVE") throw new Error("Contract not found or not active");
 
-      // 2. Insert Adjustment
+      const adjAmount = roundMoney(payload.amount);
+      if (adjAmount <= 0) throw new Error("Adjustment amount must be greater than 0");
+
+      let targetSched: any = null;
+      let schedPending = 0;
+
+      // 2. Validate Schedule (if schedule scope)
+      if (payload.schedule_id) {
+        const targetScheduleRes = await tx.select().from(installmentSchedulesTable)
+          .where(and(
+            eq(installmentSchedulesTable.id, payload.schedule_id),
+            eq(installmentSchedulesTable.contract_id, contractId)
+          ))
+          .limit(1);
+
+        if (targetScheduleRes.length === 0) {
+          throw new Error("Specified installment schedule not found on this contract.");
+        }
+
+        targetSched = targetScheduleRes[0];
+        const schedDue = roundMoney(parseFloat(targetSched.amount_due || "0"));
+        const schedPaid = roundMoney(parseFloat(targetSched.amount_paid || "0"));
+        schedPending = roundMoney(Math.max(0, schedDue - schedPaid));
+
+        if (payload.type !== "PENALTY" && adjAmount > schedPending + 0.0001) {
+          throw new Error(`Schedule adjustment amount (Rs. ${adjAmount.toFixed(2)}) cannot exceed the pending installment amount (Rs. ${schedPending.toFixed(2)})`);
+        }
+      }
+
+      // Validate against total contract balance
+      const currentContractBal = roundMoney(parseFloat(contract.balance || "0"));
+      if (payload.type !== "PENALTY" && adjAmount > currentContractBal + 0.0001) {
+        throw new Error(`Adjustment amount (Rs. ${adjAmount.toFixed(2)}) cannot exceed the total contract balance (Rs. ${currentContractBal.toFixed(2)})`);
+      }
+
+      // 3. Insert Adjustment Record
       const adjustmentId = uuidv7();
       await tx.insert(contractAdjustmentsTable).values({
         id: adjustmentId,
         contract_id: contractId,
         type: payload.type,
-        amount: payload.amount.toString(),
-        reason: payload.reason,
+        amount: adjAmount.toFixed(2),
+        reason: payload.schedule_id && targetSched 
+          ? `[Installment #${targetSched.installment_number}] ${payload.reason}`
+          : payload.reason,
         created_by: createdBy,
       });
 
-      // 3. Update Balance
-      let newBalance = parseFloat(contract.balance);
+      // 4. Update Contract Balance
+      let newBalance = currentContractBal;
       if (payload.type === "PENALTY") {
-        newBalance += payload.amount;
+        newBalance = roundMoney(newBalance + adjAmount);
       } else {
-        newBalance -= payload.amount;
+        newBalance = roundMoney(newBalance - adjAmount);
       }
       
-      if (newBalance < 0) throw new Error("Adjustment causes negative balance");
+      if (newBalance < -0.0001) throw new Error("Adjustment causes negative balance");
+      if (newBalance < 0) newBalance = 0;
 
-      const newStatus = newBalance === 0 ? "PAID_OFF" : "ACTIVE";
+      const newStatus = isZeroMoney(newBalance) ? "PAID_OFF" : "ACTIVE";
       await tx.update(installmentContractsTable)
-        .set({ balance: newBalance.toString(), status: newStatus })
+        .set({ balance: newBalance.toFixed(2), status: newStatus })
         .where(eq(installmentContractsTable.id, contractId));
 
-      // 4. Handle Schedules Based on Adjustment Type
-      if (payload.type === "PENALTY") {
-        // Inject penalty directly into the next immediate unpaid schedule
-        const nextSchedules = await tx.select().from(installmentSchedulesTable)
-          .where(
-            and(
-              eq(installmentSchedulesTable.contract_id, contractId),
-              or(eq(installmentSchedulesTable.status, "PENDING"), eq(installmentSchedulesTable.status, "PARTIALLY_PAID"), eq(installmentSchedulesTable.status, "OVERDUE"))
-            )
-          )
-          .orderBy(asc(installmentSchedulesTable.due_date))
-          .limit(1);
+      // 5. Handle Schedules Based on Scope & Adjustment Type
+      if (payload.schedule_id && targetSched) {
+        const schedDue = roundMoney(parseFloat(targetSched.amount_due || "0"));
+        const schedPaid = roundMoney(parseFloat(targetSched.amount_paid || "0"));
 
-        if (nextSchedules.length > 0) {
-          const target = nextSchedules[0];
-          const newAmountDue = parseFloat(target.amount_due) + payload.amount;
+        if (payload.type === "PENALTY") {
+          // Add penalty specifically to this schedule
+          const updatedDue = roundMoney(schedDue + adjAmount);
           await tx.update(installmentSchedulesTable)
-            .set({ amount_due: newAmountDue.toString() })
-            .where(eq(installmentSchedulesTable.id, target.id));
+            .set({ amount_due: updatedDue.toFixed(2) })
+            .where(eq(installmentSchedulesTable.id, targetSched.id));
         } else {
-           // Create a new schedule since none exist to attach the penalty to
-           await tx.insert(installmentSchedulesTable).values({
-             id: uuidv7(),
-             contract_id: contractId,
-             installment_number: 999,
-             due_date: new Date().toISOString().split('T')[0],
-             amount_due: payload.amount.toString(),
-             amount_paid: "0.00",
-             status: "PENDING"
-           });
+          // DISCOUNT / WRITE_OFF / REBATE on this specific schedule
+          if (payload.type === "WRITE_OFF" || adjAmount >= schedPending - 0.0001) {
+            // Waive this specific schedule entirely
+            await tx.update(installmentSchedulesTable)
+              .set({ status: "WAIVED" })
+              .where(eq(installmentSchedulesTable.id, targetSched.id));
+          } else {
+            // Partially reduce this specific schedule (e.g. waiving late fee)
+            const updatedDue = roundMoney(Math.max(schedPaid, schedDue - adjAmount));
+            const isFullySettled = isZeroMoney(updatedDue - schedPaid);
+            const updatedStatus = isFullySettled ? "PAID" : targetSched.status;
+
+            await tx.update(installmentSchedulesTable)
+              .set({
+                amount_due: updatedDue.toFixed(2),
+                status: updatedStatus
+              })
+              .where(eq(installmentSchedulesTable.id, targetSched.id));
+          }
+
+          // If the entire contract balance reached 0 as a result, waive any remaining unpaid schedules
+          if (newStatus === "PAID_OFF") {
+            await tx.update(installmentSchedulesTable)
+              .set({ status: "WAIVED" })
+              .where(
+                and(
+                  eq(installmentSchedulesTable.contract_id, contractId),
+                  or(eq(installmentSchedulesTable.status, "PENDING"), eq(installmentSchedulesTable.status, "PARTIALLY_PAID"), eq(installmentSchedulesTable.status, "OVERDUE"))
+                )
+              );
+          }
         }
       } else {
-        // DISCOUNT / WRITE_OFF / REBATE
-        if (newStatus === "PAID_OFF") {
-          // Keep existing 0 logic
-          await tx.update(installmentSchedulesTable)
-            .set({ status: "WAIVED" })
-            .where(
-              and(
-                eq(installmentSchedulesTable.contract_id, contractId),
-                or(eq(installmentSchedulesTable.status, "PENDING"), eq(installmentSchedulesTable.status, "PARTIALLY_PAID"), eq(installmentSchedulesTable.status, "OVERDUE"))
-              )
-            );
-        } else {
-          // Evenly Distribute the remaining balance
-          const remainingSchedules = await tx.select().from(installmentSchedulesTable)
+        // --- Contract-Level Adjustment (Contract-Wide Scope) ---
+        if (payload.type === "PENALTY") {
+          // Inject penalty directly into the next immediate unpaid schedule
+          const nextSchedules = await tx.select().from(installmentSchedulesTable)
             .where(
               and(
                 eq(installmentSchedulesTable.contract_id, contractId),
                 or(eq(installmentSchedulesTable.status, "PENDING"), eq(installmentSchedulesTable.status, "PARTIALLY_PAID"), eq(installmentSchedulesTable.status, "OVERDUE"))
               )
             )
-            .orderBy(asc(installmentSchedulesTable.due_date));
-          
-          if (remainingSchedules.length > 0) {
-            const basePortion = Math.floor((newBalance / remainingSchedules.length) * 100) / 100;
-            let distributedTotal = 0;
+            .orderBy(asc(installmentSchedulesTable.due_date))
+            .limit(1);
 
-            for (let i = 0; i < remainingSchedules.length; i++) {
-              const schedule = remainingSchedules[i];
-              let portion = basePortion;
-              
-              // If it's the last schedule, give it the remainder to ensure perfect rounding
-              if (i === remainingSchedules.length - 1) {
-                portion = Math.round((newBalance - distributedTotal) * 100) / 100;
+          if (nextSchedules.length > 0) {
+            const target = nextSchedules[0];
+            const newAmountDue = roundMoney(parseFloat(target.amount_due || "0") + adjAmount);
+            await tx.update(installmentSchedulesTable)
+              .set({ amount_due: newAmountDue.toFixed(2) })
+              .where(eq(installmentSchedulesTable.id, target.id));
+          } else {
+             // Create a new schedule since none exist to attach the penalty to
+             await tx.insert(installmentSchedulesTable).values({
+               id: uuidv7(),
+               contract_id: contractId,
+               installment_number: 999,
+               due_date: new Date().toISOString().split('T')[0],
+               amount_due: adjAmount.toFixed(2),
+               amount_paid: "0.00",
+               status: "PENDING"
+             });
+          }
+        } else {
+          // DISCOUNT / WRITE_OFF / REBATE
+          if (newStatus === "PAID_OFF") {
+            // Waive all remaining schedules
+            await tx.update(installmentSchedulesTable)
+              .set({ status: "WAIVED" })
+              .where(
+                and(
+                  eq(installmentSchedulesTable.contract_id, contractId),
+                  or(eq(installmentSchedulesTable.status, "PENDING"), eq(installmentSchedulesTable.status, "PARTIALLY_PAID"), eq(installmentSchedulesTable.status, "OVERDUE"))
+                )
+              );
+          } else {
+            // Evenly Distribute the remaining balance across future unpaid schedules
+            const remainingSchedules = await tx.select().from(installmentSchedulesTable)
+              .where(
+                and(
+                  eq(installmentSchedulesTable.contract_id, contractId),
+                  or(eq(installmentSchedulesTable.status, "PENDING"), eq(installmentSchedulesTable.status, "PARTIALLY_PAID"), eq(installmentSchedulesTable.status, "OVERDUE"))
+                )
+              )
+              .orderBy(asc(installmentSchedulesTable.due_date));
+            
+            if (remainingSchedules.length > 0) {
+              const basePortion = roundMoney(Math.floor((newBalance / remainingSchedules.length) * 100) / 100);
+              let distributedTotal = 0;
+
+              for (let i = 0; i < remainingSchedules.length; i++) {
+                const schedule = remainingSchedules[i];
+                let portion = basePortion;
+                
+                // If it's the last schedule, give it the remainder to ensure perfect rounding
+                if (i === remainingSchedules.length - 1) {
+                  portion = roundMoney(newBalance - distributedTotal);
+                }
+                
+                distributedTotal = roundMoney(distributedTotal + portion);
+                
+                const newAmountDue = roundMoney(parseFloat(schedule.amount_paid || "0") + portion);
+                
+                await tx.update(installmentSchedulesTable)
+                  .set({ amount_due: newAmountDue.toFixed(2) })
+                  .where(eq(installmentSchedulesTable.id, schedule.id));
               }
-              
-              distributedTotal += portion;
-              
-              const newAmountDue = parseFloat(schedule.amount_paid) + portion;
-              
-              await tx.update(installmentSchedulesTable)
-                .set({ amount_due: newAmountDue.toString() })
-                .where(eq(installmentSchedulesTable.id, schedule.id));
             }
           }
         }
@@ -754,6 +852,139 @@ export class CollectionsService {
 
     combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Descending
     return combined;
+  }
+
+  static async getContractBreakdown(contractId: string) {
+    const contract = await db.query.installmentContractsTable.findFirst({
+      where: eq(installmentContractsTable.id, contractId),
+      with: {
+        scheme: true,
+        customer: true,
+        guarantor: true,
+      }
+    });
+
+    if (!contract) throw new Error("Contract not found");
+
+    const schedules = await db.query.installmentSchedulesTable.findMany({
+      where: eq(installmentSchedulesTable.contract_id, contractId),
+      orderBy: [asc(installmentSchedulesTable.installment_number)]
+    });
+
+    const adjustments = await db.select({
+      id: contractAdjustmentsTable.id,
+      type: contractAdjustmentsTable.type,
+      amount: contractAdjustmentsTable.amount,
+      reason: contractAdjustmentsTable.reason,
+      created_at: contractAdjustmentsTable.created_at,
+      created_by: contractAdjustmentsTable.created_by,
+      created_by_name: usersTable.name,
+    })
+    .from(contractAdjustmentsTable)
+    .leftJoin(usersTable, eq(contractAdjustmentsTable.created_by, usersTable.id))
+    .where(eq(contractAdjustmentsTable.contract_id, contractId))
+    .orderBy(desc(contractAdjustmentsTable.created_at));
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let totalOverdue = 0;
+    let overdueCount = 0;
+    let totalDue = 0;
+    let totalPaid = 0;
+
+    const enrichedSchedules = schedules.map(s => {
+      const dueAmt = parseFloat(s.amount_due || '0');
+      const paidAmt = parseFloat(s.amount_paid || '0');
+      const remaining = Math.max(0, dueAmt - paidAmt);
+      
+      totalDue += dueAmt;
+      totalPaid += paidAmt;
+
+      const dueDate = new Date(s.due_date);
+      dueDate.setHours(0, 0, 0, 0);
+      const isPastDue = dueDate < today && remaining > 0.005;
+
+      let daysOverdue = 0;
+      if (isPastDue) {
+        const diffTime = today.getTime() - dueDate.getTime();
+        daysOverdue = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        totalOverdue += remaining;
+        overdueCount++;
+      }
+
+      return {
+        id: s.id,
+        installment_number: s.installment_number,
+        due_date: s.due_date,
+        amount_due: dueAmt,
+        amount_paid: paidAmt,
+        balance_remaining: remaining,
+        status: s.status,
+        is_overdue: isPastDue,
+        days_overdue: daysOverdue,
+      };
+    });
+
+    let totalPenalties = 0;
+    let totalDiscounts = 0;
+    let totalWriteOffs = 0;
+    let totalRebates = 0;
+
+    const formattedAdjustments = adjustments.map(a => {
+      const amt = parseFloat(a.amount || '0');
+      if (a.type === 'PENALTY') totalPenalties += amt;
+      else if (a.type === 'DISCOUNT') totalDiscounts += amt;
+      else if (a.type === 'WRITE_OFF') totalWriteOffs += amt;
+      else if (a.type === 'REBATE') totalRebates += amt;
+
+      const isSystem = a.created_by === '00000000-0000-0000-0000-000000000000' || !a.created_by_name;
+      return {
+        id: a.id,
+        type: a.type,
+        amount: amt,
+        reason: a.reason,
+        created_at: a.created_at,
+        created_by: a.created_by,
+        created_by_name: isSystem ? 'System (Automated Late Fee)' : a.created_by_name,
+      };
+    });
+
+    const totalPayable = parseFloat(contract.total_payable || '0');
+    const balance = parseFloat(contract.balance || '0');
+    const collectedAmount = Math.max(0, totalPayable - balance);
+
+    return {
+      contract: {
+        id: contract.id,
+        contract_no: contract.contract_no,
+        status: contract.status,
+        total_payable: totalPayable,
+        collected_amount: collectedAmount,
+        balance: balance,
+        downpayment_amount: parseFloat(contract.downpayment_amount || '0'),
+        installment_amount: parseFloat(contract.installment_amount || '0'),
+        terms_months: contract.terms_months,
+        scheme_name: contract.scheme?.name || 'Standard Plan',
+        customer_name: contract.customer?.full_name || 'N/A',
+        customer_nic: contract.customer?.nic || 'N/A',
+        customer_mobile: contract.customer?.mobile || 'N/A',
+      },
+      summary: {
+        overdue_amount: totalOverdue,
+        overdue_count: overdueCount,
+        total_penalties: totalPenalties,
+        total_discounts: totalDiscounts,
+        total_write_offs: totalWriteOffs,
+        total_rebates: totalRebates,
+        total_due: totalDue,
+        total_paid: totalPaid,
+        remaining_balance: balance,
+        is_settled: totalOverdue === 0,
+      },
+      schedules: enrichedSchedules,
+      adjustments: formattedAdjustments,
+    };
   }
 
   static async getScheduleCounts(branchId?: string, routeId?: string, areaId?: string) {

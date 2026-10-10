@@ -4,6 +4,7 @@ import { useListReturns, useGetSaleForReturn, useProcessReturn } from '../api';
 import { Search, CornerUpLeft, AlertTriangle, Info } from 'lucide-react';
 import { DataTable } from '../../../components/DataTable';
 import { useTableUrlState } from '../../../hooks/useTableUrlState';
+import { Link } from 'react-router-dom';
 
 export function ReturnsPage() {
   const {
@@ -66,36 +67,110 @@ export function ReturnsPage() {
     {
       accessorKey: 'created_at',
       header: 'DATE',
-      cell: (info) => <span>{new Date(info.getValue() as string).toLocaleDateString('en-GB')}</span>,
+      cell: (info) => (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600 }}>{new Date(info.getValue() as string).toLocaleDateString('en-GB')}</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+            {new Date(info.getValue() as string).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+        </div>
+      ),
     },
     {
       accessorKey: 'sale_id',
-      header: 'SALE ID',
-      cell: (info) => <span style={{ fontFamily: 'monospace' }}>{(info.getValue() as string).slice(-8)}</span>,
+      header: 'SALE REF',
+      cell: ({ row }) => (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <Link 
+            to={`/sales/${row.original.sale_id}`}
+            style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--brand-primary)', textDecoration: 'none' }}
+            title="View Sale Details"
+          >
+            {row.original.reference_number || (row.original.sale_id ? `SALE-${row.original.sale_id.slice(-8)}` : '—')}
+          </Link>
+          {row.original.offline_receipt_number && (
+            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+              Offline #{row.original.offline_receipt_number}
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'customer_name',
+      header: 'CUSTOMER',
+      cell: ({ row }) => (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600 }}>{row.original.customer_name || 'Walk-in Customer'}</span>
+          {row.original.customer_mobile && row.original.customer_mobile !== '-' && (
+            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{row.original.customer_mobile}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'product_name',
+      header: 'PRODUCT / ITEM',
+      cell: ({ row }) => (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600 }}>{row.original.product_name || 'Product Item'}</span>
+          {row.original.serial_number && row.original.serial_number !== '-' && (
+            <span style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--brand-primary)', background: 'rgba(245, 158, 11, 0.1)', padding: '1px 6px', borderRadius: '4px', display: 'inline-block', width: 'fit-content', marginTop: '2px' }}>
+              S/N: {row.original.serial_number}
+            </span>
+          )}
+        </div>
+      ),
     },
     {
       accessorKey: 'type',
       header: 'TYPE',
-      cell: (info) => <span style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, background: 'var(--bg-tertiary)' }}>{info.getValue() as string}</span>,
+      cell: (info) => <span style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, background: 'var(--bg-tertiary)' }}>{info.getValue() as string}</span>,
     },
     {
       accessorKey: 'disposition',
       header: 'DISPOSITION',
-      cell: (info) => <span style={{ color: 'var(--text-secondary)' }}>{info.getValue() as string}</span>,
+      cell: (info) => (
+        <span style={{ 
+          fontSize: '12px', 
+          fontWeight: 600, 
+          color: info.getValue() === 'RESTOCKED' ? '#10b981' : info.getValue() === 'DEFECTIVE_DEPOT' ? '#f59e0b' : 'var(--text-secondary)' 
+        }}>
+          {info.getValue() as string}
+        </span>
+      ),
     },
     {
       id: 'refund',
       header: 'REFUND',
       cell: ({ row }) => (
-        <span style={{ fontWeight: 600 }}>
-          {row.original.refund_mode !== 'NONE' ? `Rs. ${Number(row.original.refund_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })} (${row.original.refund_mode})` : '—'}
-        </span>
+        row.original.refund_mode !== 'NONE' ? (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 700, color: '#10b981' }}>
+              Rs. {Number(row.original.refund_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)' }}>
+              {row.original.refund_mode}
+            </span>
+          </div>
+        ) : (
+          <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
+        )
       ),
     },
     {
       accessorKey: 'reason',
       header: 'REASON',
-      cell: (info) => <span style={{ color: 'var(--text-secondary)', display: 'block', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{info.getValue() as string}</span>,
+      cell: (info) => (
+        <span style={{ color: 'var(--text-secondary)', display: 'block', maxWidth: '180px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={info.getValue() as string}>
+          {info.getValue() as string}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'processed_by_name',
+      header: 'PROCESSED BY',
+      cell: (info) => <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{info.getValue() as string || 'Staff'}</span>,
     },
   ], []);
 
@@ -431,19 +506,85 @@ export function ReturnsPage() {
       )}
 
       {activeTab === 'HISTORY' && (
-        <DataTable 
-          columns={historyColumns}
-          data={returns}
-          isLoading={loadingHistory}
-          emptyMessage="No returns processed yet."
-          serverPagination={meta ? {
-            pageIndex,
-            pageSize,
-            pageCount: meta.total_pages,
-            total: meta.total_records,
-            setPagination
-          } : undefined}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* History Search & Stats Bar */}
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            flexWrap: 'wrap', 
+            gap: '12px',
+            background: 'var(--bg-primary)',
+            padding: '16px 20px',
+            borderRadius: '12px',
+            border: '1px solid var(--border-color)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '1 1 320px', maxWidth: '520px' }}>
+              <div style={{ position: 'relative', width: '100%' }}>
+                <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+                <input 
+                  type="text" 
+                  placeholder="Search by invoice #, customer, item, serial, reason, or staff..." 
+                  value={historySearch}
+                  onChange={e => {
+                    setFilters({ historySearch: e.target.value });
+                    setPagination((prev: any) => ({ ...prev, pageIndex: 0 }));
+                  }}
+                  style={{ 
+                    width: '100%', 
+                    padding: '8px 12px 8px 36px', 
+                    borderRadius: '8px', 
+                    border: '1px solid var(--border-color)', 
+                    background: 'var(--bg-secondary)', 
+                    color: 'var(--text-primary)',
+                    fontSize: '13px'
+                  }}
+                />
+              </div>
+              {historySearch && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilters({ historySearch: '' });
+                    setPagination((prev: any) => ({ ...prev, pageIndex: 0 }));
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    borderRadius: '6px',
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  Clear Search
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                Total: <strong style={{ color: 'var(--text-primary)' }}>{meta?.total_records ?? returns.length}</strong> returns
+              </span>
+            </div>
+          </div>
+
+          <DataTable 
+            columns={historyColumns}
+            data={returns}
+            isLoading={loadingHistory}
+            emptyMessage={historySearch ? "No returns matching your search criteria." : "No returns processed yet."}
+            serverPagination={meta ? {
+              pageIndex,
+              pageSize,
+              pageCount: meta.total_pages,
+              total: meta.total_records,
+              setPagination
+            } : undefined}
+          />
+        </div>
       )}
     </div>
   );

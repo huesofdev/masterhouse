@@ -23,7 +23,9 @@ import {
   exportPayrollReport,
   getMyStatsReport,
   getSerialLifecycleReport,
-  exportSerialLifecycleReport
+  exportSerialLifecycleReport,
+  getRefundsReport,
+  exportRefundsReport
 } from "./reports.controller";
 import { requireAuth } from "../../middlewares/jwt.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
@@ -51,6 +53,7 @@ router.get("/tax", requirePermission("reports:view"), getTaxReport);
 router.get("/product-performance", requirePermission("reports:view"), getProductPerformanceReport);
 router.get("/bookings", requirePermission("reports:view"), getBookingsReport);
 router.get("/payroll", requirePermission("reports:view"), getPayrollReport);
+router.get("/refunds", requirePermission("reports:view"), getRefundsReport);
 
 // Export reports permission required for Export endpoints
 router.get("/stock/export", requirePermission("reports:export"), exportStockReport);
@@ -62,5 +65,6 @@ router.get("/tax/export", requirePermission("reports:export"), exportTaxReport);
 router.get("/product-performance/export", requirePermission("reports:export"), exportProductPerformanceReport);
 router.get("/bookings/export", requirePermission("reports:export"), exportBookingsReport);
 router.get("/payroll/export", requirePermission("reports:export"), exportPayrollReport);
+router.get("/refunds/export", requirePermission("reports:export"), exportRefundsReport);
 
 export default router;

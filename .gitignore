@@ -1,34 +1,44 @@
-﻿# Dependencies
+# Dependencies
 node_modules/
 .pnpm-store/
 
-# Build outputs
+# Build outputs & caches
 dist/
 build/
 .output/
+.turbo/
+*.tsbuildinfo
 
-# Environment files
+# Environment files & Secrets
 .env
-.env.production
-.env.development
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Expo & Mobile
 .expo/
 .expo-shared/
+web-build/
 *.jks
 *.p8
 *.p12
 *.key
+*.keystore
 *.mobileprovision
 *.orig.*
 
-# Logs & Temp
+# Android native build outputs
+apps/mobile/android/.gradle/
+apps/mobile/android/.kotlin/
+apps/mobile/android/app/build/
+apps/mobile/android/build/
+apps/mobile/android/local.properties
+
+# Logs & Temporary files
 *.log
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
+hs_err_pid*.log
 
 # Uploads & Temp Zips
 uploads/

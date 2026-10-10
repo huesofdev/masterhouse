@@ -6,7 +6,8 @@ import { suppliersTable } from "../suppliers/suppliers.schema";
 import { productsTable } from "../products/products.schema";
 import { warehousesTable } from "../warehouses/warehouses.schema";
 import { salesTable, saleItemsTable } from "../sale/sales.schema";
-import { installmentContractsTable, installmentSchedulesTable, collectionReceiptsTable, installmentSchemesTable } from "../collections/collections.schema";
+import { installmentContractsTable, installmentSchedulesTable, collectionReceiptsTable, installmentSchemesTable, refundsTable } from "../collections/collections.schema";
+import { returnsTable } from "../service/service.schema";
 import { customersTable } from "../customers/customers.schema";
 import { branchesTable } from "../branches/branches.schema";
 import { routesTable } from "../routes/routes.schema";
@@ -139,8 +140,9 @@ export class ReportsService {
         subtotal: salesTable.subtotal,
         downpayment: salesTable.downpayment,
         total: salesTable.total,
+        refundedAmount: sql<number>`COALESCE((SELECT SUM(CAST(r.refund_amount AS DECIMAL(14,2))) FROM returns r WHERE r.sale_id = ${salesTable.id}), 0)`,
         pendingAmount: sql<number>`IF(${salesTable.sale_type} = 'DIRECT', 0, COALESCE(${installmentContractsTable.balance}, 0))`,
-        receivedAmount: sql<number>`IF(${salesTable.sale_type} = 'DIRECT', ${salesTable.total}, ${salesTable.downpayment} + (COALESCE(${installmentContractsTable.total_payable}, 0) - COALESCE(${installmentContractsTable.balance}, 0)))`,
+        receivedAmount: sql<number>`IF(${salesTable.sale_type} = 'DIRECT', ${salesTable.total} - COALESCE((SELECT SUM(CAST(r.refund_amount AS DECIMAL(14,2))) FROM returns r WHERE r.sale_id = ${salesTable.id}), 0), ${salesTable.downpayment} + (COALESCE(${installmentContractsTable.total_payable}, 0) - COALESCE(${installmentContractsTable.balance}, 0)) - COALESCE((SELECT SUM(CAST(ref.amount AS DECIMAL(14,2))) FROM refunds ref WHERE ref.contract_id = ${installmentContractsTable.id}), 0))`,
         customerName: customersTable.full_name,
         createdBy: usersTable.name,
         tripId: salesTable.trip_id,
@@ -157,7 +159,7 @@ export class ReportsService {
       totalVolume: sql<number>`COALESCE(SUM(${salesTable.total}), 0)`,
       totalDownpayments: sql<number>`COALESCE(SUM(${salesTable.downpayment}), 0)`,
       totalPending: sql<number>`COALESCE(SUM(IF(${salesTable.sale_type} = 'DIRECT', 0, COALESCE(${installmentContractsTable.balance}, 0))), 0)`,
-      totalReceived: sql<number>`COALESCE(SUM(IF(${salesTable.sale_type} = 'DIRECT', ${salesTable.total}, ${salesTable.downpayment} + (COALESCE(${installmentContractsTable.total_payable}, 0) - COALESCE(${installmentContractsTable.balance}, 0)))), 0)`
+      totalReceived: sql<number>`COALESCE(SUM(IF(${salesTable.sale_type} = 'DIRECT', ${salesTable.total} - COALESCE((SELECT SUM(CAST(r.refund_amount AS DECIMAL(14,2))) FROM returns r WHERE r.sale_id = ${salesTable.id}), 0), ${salesTable.downpayment} + (COALESCE(${installmentContractsTable.total_payable}, 0) - COALESCE(${installmentContractsTable.balance}, 0)) - COALESCE((SELECT SUM(CAST(ref.amount AS DECIMAL(14,2))) FROM refunds ref WHERE ref.contract_id = ${installmentContractsTable.id}), 0))), 0)`
     })
       .from(salesTable)
       .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
@@ -381,12 +383,13 @@ export class ReportsService {
     if (start) salesConditions.push(gte(salesTable.created_at, start));
     if (end) salesConditions.push(lte(salesTable.created_at, end));
     if (filters.branchId) salesConditions.push(eq(salesTable.branch_id, filters.branchId));
+    salesConditions.push(ne(salesTable.status, "CANCELLED"));
 
-    // 1. Direct Sales Revenue, COGS, Tax (Separated to avoid one-to-many multiplication in SUM)
+    // 1. Direct Sales Revenue, COGS, Tax, and Returns/Refunds
     const directRevenueRes = await db
       .select({
-        revenue: sql<number>`SUM(${salesTable.total} - ${salesTable.tax_amount})`,
-        taxCollected: sql<number>`SUM(${salesTable.tax_amount})`
+        grossRevenue: sql<number>`COALESCE(SUM(${salesTable.total} - ${salesTable.tax_amount}), 0)`,
+        taxCollected: sql<number>`COALESCE(SUM(${salesTable.tax_amount}), 0)`
       })
       .from(salesTable)
       .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
@@ -394,25 +397,61 @@ export class ReportsService {
 
     const directCogsRes = await db
       .select({
-        cogs: sql<number>`SUM(${saleItemsTable.quantity} * ${saleItemsTable.unit_cost})`
+        grossCogs: sql<number>`COALESCE(SUM(${saleItemsTable.quantity} * ${saleItemsTable.unit_cost}), 0)`
       })
       .from(saleItemsTable)
       .innerJoin(salesTable, eq(saleItemsTable.sale_id, salesTable.id))
       .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
       .where(and(eq(salesTable.sale_type, 'DIRECT'), ...(salesConditions.length > 0 ? salesConditions : [sql`1=1`])));
 
+    // 1.1 Direct Sales Returns & Cash Refunds
+    const directRefundsRes = await db
+      .select({
+        totalRefunds: sql<number>`COALESCE(SUM(CAST(${returnsTable.refund_amount} AS DECIMAL(14,2))), 0)`
+      })
+      .from(returnsTable)
+      .innerJoin(salesTable, eq(returnsTable.sale_id, salesTable.id))
+      .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
+      .where(and(eq(salesTable.sale_type, 'DIRECT'), ...(salesConditions.length > 0 ? salesConditions : [sql`1=1`])));
+
+    // 1.2 Restocked Item Cost (COGS reversal for returned items back in stock)
+    const restockedCogsRes = await db
+      .select({
+        restockedCogs: sql<number>`COALESCE(SUM(${saleItemsTable.quantity} * ${saleItemsTable.unit_cost}), 0)`
+      })
+      .from(returnsTable)
+      .innerJoin(salesTable, eq(returnsTable.sale_id, salesTable.id))
+      .innerJoin(saleItemsTable, eq(returnsTable.sale_item_id, saleItemsTable.id))
+      .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
+      .where(and(
+        eq(returnsTable.disposition, 'RESTOCKED'),
+        ...(salesConditions.length > 0 ? salesConditions : [sql`1=1`])
+      ));
+
+    const grossDirectRevenue = Number(directRevenueRes[0]?.grossRevenue || 0);
+    const directRefunds = Number(directRefundsRes[0]?.totalRefunds || 0);
+    const netDirectRevenue = Math.max(0, grossDirectRevenue - directRefunds);
+
+    const grossDirectCogs = Number(directCogsRes[0]?.grossCogs || 0);
+    const restockedCogs = Number(restockedCogsRes[0]?.restockedCogs || 0);
+    const netDirectCogs = Math.max(0, grossDirectCogs - restockedCogs);
+
     const directSales = {
-      revenue: Number(directRevenueRes[0]?.revenue || 0),
+      grossRevenue: grossDirectRevenue,
+      refunds: directRefunds,
+      revenue: netDirectRevenue,
       taxCollected: Number(directRevenueRes[0]?.taxCollected || 0),
-      cogs: Number(directCogsRes[0]?.cogs || 0)
+      grossCogs: grossDirectCogs,
+      restockedCogs: restockedCogs,
+      cogs: netDirectCogs
     };
 
-    // 2. Installment Expected Revenue, COGS, Tax (Separated to avoid one-to-many multiplication in SUM)
+    // 2. Installment Expected Revenue, COGS, Tax, and Refunds
     const installmentRevenueRes = await db
       .select({
-        totalRevenue: sql<number>`SUM(${salesTable.total} - ${salesTable.tax_amount})`,
-        taxCollected: sql<number>`SUM(${salesTable.tax_amount})`,
-        interest: sql<number>`SUM(${installmentContractsTable.total_payable} - ${installmentContractsTable.principal})`
+        totalRevenue: sql<number>`COALESCE(SUM(${salesTable.total} - ${salesTable.tax_amount}), 0)`,
+        taxCollected: sql<number>`COALESCE(SUM(${salesTable.tax_amount}), 0)`,
+        interest: sql<number>`COALESCE(SUM(${installmentContractsTable.total_payable} - ${installmentContractsTable.principal}), 0)`
       })
       .from(installmentContractsTable)
       .innerJoin(salesTable, eq(installmentContractsTable.sale_id, salesTable.id))
@@ -421,7 +460,7 @@ export class ReportsService {
 
     const installmentCogsRes = await db
       .select({
-        cogs: sql<number>`SUM(${saleItemsTable.quantity} * ${saleItemsTable.unit_cost})`
+        cogs: sql<number>`COALESCE(SUM(${saleItemsTable.quantity} * ${saleItemsTable.unit_cost}), 0)`
       })
       .from(saleItemsTable)
       .innerJoin(salesTable, eq(saleItemsTable.sale_id, salesTable.id))
@@ -429,14 +468,27 @@ export class ReportsService {
       .innerJoin(customersTable, eq(installmentContractsTable.customer_id, customersTable.id))
       .where(and(...(salesConditions.length > 0 ? salesConditions : [sql`1=1`])));
 
+    const installmentRefundsRes = await db
+      .select({
+        totalRefunds: sql<number>`COALESCE(SUM(CAST(${refundsTable.amount} AS DECIMAL(14,2))), 0)`
+      })
+      .from(refundsTable)
+      .innerJoin(installmentContractsTable, eq(refundsTable.contract_id, installmentContractsTable.id))
+      .innerJoin(salesTable, eq(installmentContractsTable.sale_id, salesTable.id))
+      .innerJoin(customersTable, eq(installmentContractsTable.customer_id, customersTable.id))
+      .where(and(...(salesConditions.length > 0 ? salesConditions : [sql`1=1`])));
+
+    const installmentRefunds = Number(installmentRefundsRes[0]?.totalRefunds || 0);
+
     const installmentSales = {
       totalRevenue: Number(installmentRevenueRes[0]?.totalRevenue || 0),
       taxCollected: Number(installmentRevenueRes[0]?.taxCollected || 0),
       interest: Number(installmentRevenueRes[0]?.interest || 0),
-      cogs: Number(installmentCogsRes[0]?.cogs || 0)
+      cogs: Number(installmentCogsRes[0]?.cogs || 0),
+      refunds: installmentRefunds,
     };
 
-    // 3. Realized Cash (Downpayments and Receipts)
+    // 3. Realized Cash (Downpayments and Receipts minus Refunds)
     const receiptsConditions = [];
     if (filters.routeId) receiptsConditions.push(eq(customersTable.route_id, filters.routeId));
     if (start) receiptsConditions.push(gte(collectionReceiptsTable.created_at, start));
@@ -445,7 +497,7 @@ export class ReportsService {
 
     const receiptsRes = await db
       .select({
-        collected: sql<number>`SUM(${collectionReceiptsTable.amount})`
+        collected: sql<number>`COALESCE(SUM(${collectionReceiptsTable.amount}), 0)`
       })
       .from(collectionReceiptsTable)
       .innerJoin(customersTable, eq(collectionReceiptsTable.customer_id, customersTable.id))
@@ -455,7 +507,7 @@ export class ReportsService {
 
     const downpaymentsRes = await db
       .select({
-        downpayment: sql<number>`SUM(${salesTable.downpayment})`
+        downpayment: sql<number>`COALESCE(SUM(${salesTable.downpayment}), 0)`
       })
       .from(salesTable)
       .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
@@ -479,13 +531,14 @@ export class ReportsService {
     if (end) expensesConditions.push(lte(expensesTable.expense_date, end));
 
     const expensesRes = await db
-      .select({ total: sql<number>`SUM(${expensesTable.amount})` })
+      .select({ total: sql<number>`COALESCE(SUM(${expensesTable.amount}), 0)` })
       .from(expensesTable)
       .where(and(...(expensesConditions.length > 0 ? expensesConditions : [sql`1=1`])));
     
     const totalExpenses = Number(expensesRes[0]?.total || 0);
 
-    const totalRealizedInflow = directSales.revenue + realizedCash.receipts + realizedCash.downpayments;
+    const netRealizedInstallmentReceipts = Math.max(0, realizedCash.receipts - installmentSales.refunds);
+    const totalRealizedInflow = directSales.revenue + netRealizedInstallmentReceipts + realizedCash.downpayments;
     const realizedGrossProfit = totalRealizedInflow - totalContractualCogs;
     
     const realizedNetProfit = realizedGrossProfit - totalExpenses;
@@ -493,9 +546,12 @@ export class ReportsService {
 
     return {
       contractual: {
+        grossDirectSalesRevenue: directSales.grossRevenue,
+        directSalesRefunds: directSales.refunds,
         directSalesRevenue: directSales.revenue,
         installmentRevenue: installmentSales.totalRevenue,
         installmentInterest: installmentSales.interest,
+        installmentRefunds: installmentSales.refunds,
         totalRevenue: totalContractualRevenue,
         totalTaxCollected: totalTaxCollected,
         totalCogs: totalContractualCogs,
@@ -504,9 +560,12 @@ export class ReportsService {
         netProfit: contractualNetProfit
       },
       realized: {
+        grossDirectSalesCash: directSales.grossRevenue,
+        directSalesRefunds: directSales.refunds,
         directSalesCash: directSales.revenue,
         downpaymentsCollected: realizedCash.downpayments,
         receiptsCollected: realizedCash.receipts,
+        installmentRefunds: installmentSales.refunds,
         totalInflow: totalRealizedInflow,
         totalTaxCollected: totalTaxCollected,
         totalCogs: totalContractualCogs,
@@ -842,6 +901,36 @@ export class ReportsService {
       return acc;
     }, {} as Record<string, any>);
 
+    // 2.1 Aggregate Direct Sales Refunds (for sales created by user)
+    const directRefundsConditions = [
+      eq(salesTable.sale_type, "DIRECT"),
+      ne(salesTable.status, "CANCELLED")
+    ];
+    if (filters.userId) directRefundsConditions.push(eq(salesTable.created_by, filters.userId));
+    if (filters.branchId) directRefundsConditions.push(eq(salesTable.branch_id, filters.branchId));
+    if (start) directRefundsConditions.push(gte(returnsTable.created_at, start));
+    if (end) directRefundsConditions.push(lte(returnsTable.created_at, end));
+
+    const directRefundsAgg = await db.select({
+      userId: salesTable.created_by,
+      count: sql<number>`COUNT(*)`,
+      refundAmount: sql<number>`COALESCE(SUM(CAST(${returnsTable.refund_amount} AS DECIMAL(14,2))), 0)`
+    })
+    .from(returnsTable)
+    .innerJoin(salesTable, eq(returnsTable.sale_id, salesTable.id))
+    .where(and(...directRefundsConditions))
+    .groupBy(salesTable.created_by);
+
+    const directRefundsMap = directRefundsAgg.reduce((acc, r) => {
+      if (r.userId) {
+        acc[r.userId] = {
+          refundCount: Number(r.count || 0),
+          refundAmount: Number(r.refundAmount || 0)
+        };
+      }
+      return acc;
+    }, {} as Record<string, any>);
+
     // 3. Aggregate Installment Sales Downpayments (created_by = user)
     const installmentSalesConditions = [
       eq(salesTable.sale_type, "INSTALLMENT"),
@@ -870,6 +959,67 @@ export class ReportsService {
       }
       return acc;
     }, {} as Record<string, any>);
+
+    // 3.1 Aggregate Installment Refunds with Option B: Downpayment Deduction & Pro-Rata Collection Sharing
+    const installmentRefundsConditions = [
+      eq(salesTable.sale_type, "INSTALLMENT"),
+      ne(salesTable.status, "CANCELLED")
+    ];
+    if (filters.userId) installmentRefundsConditions.push(eq(salesTable.created_by, filters.userId));
+    if (filters.branchId) installmentRefundsConditions.push(eq(salesTable.branch_id, filters.branchId));
+    if (start) installmentRefundsConditions.push(gte(refundsTable.created_at, start));
+    if (end) installmentRefundsConditions.push(lte(refundsTable.created_at, end));
+
+    const refundedContracts = await db.select({
+      contractId: refundsTable.contract_id,
+      salesRepId: salesTable.created_by,
+      downpayment: sql<number>`CAST(${salesTable.downpayment} AS DECIMAL(14,2))`,
+      totalRefunded: sql<number>`SUM(CAST(${refundsTable.amount} AS DECIMAL(14,2)))`
+    })
+    .from(refundsTable)
+    .innerJoin(installmentContractsTable, eq(refundsTable.contract_id, installmentContractsTable.id))
+    .innerJoin(salesTable, eq(installmentContractsTable.sale_id, salesTable.id))
+    .where(and(...installmentRefundsConditions))
+    .groupBy(refundsTable.contract_id, salesTable.created_by, salesTable.downpayment);
+
+    const downpaymentRefundsMap: Record<string, number> = {};
+    const collectorRefundsMap: Record<string, number> = {};
+
+    for (const rc of refundedContracts) {
+      const salesRepId = rc.salesRepId;
+      const downpayment = Number(rc.downpayment || 0);
+      const totalRefunded = Number(rc.totalRefunded || 0);
+
+      // Downpayment covers up to its full amount
+      const downpaymentDeduction = Math.min(downpayment, totalRefunded);
+      if (salesRepId) {
+        downpaymentRefundsMap[salesRepId] = (downpaymentRefundsMap[salesRepId] || 0) + downpaymentDeduction;
+      }
+
+      // Excess refund beyond downpayment is shared pro-rata among collectors on this contract
+      const excessRefund = Math.max(0, totalRefunded - downpayment);
+      if (excessRefund > 0) {
+        const receiptsOnContract = await db.select({
+          collectorId: collectionReceiptsTable.collected_by,
+          amount: sql<number>`SUM(CAST(${collectionReceiptsTable.amount} AS DECIMAL(14,2)))`
+        })
+        .from(collectionReceiptsTable)
+        .where(eq(collectionReceiptsTable.contract_id, rc.contractId))
+        .groupBy(collectionReceiptsTable.collected_by);
+
+        const totalCollectedOnContract = receiptsOnContract.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+        if (totalCollectedOnContract > 0) {
+          for (const rec of receiptsOnContract) {
+            const collectorId = rec.collectorId;
+            const collectorAmt = Number(rec.amount || 0);
+            const collectorShare = (collectorAmt / totalCollectedOnContract) * excessRefund;
+            if (collectorId) {
+              collectorRefundsMap[collectorId] = (collectorRefundsMap[collectorId] || 0) + collectorShare;
+            }
+          }
+        }
+      }
+    }
 
     // 4. Aggregate Collection Receipts & Downpayment Recoveries (collected_by = user)
     const receiptsConditions = [];
@@ -913,7 +1063,10 @@ export class ReportsService {
 
     const extraUserIds = [...new Set([
       ...Object.keys(directSalesMap),
+      ...Object.keys(directRefundsMap),
       ...Object.keys(installmentSalesMap),
+      ...Object.keys(downpaymentRefundsMap),
+      ...Object.keys(collectorRefundsMap),
       ...Object.keys(receiptsMap)
     ])].filter(id => !userMap[id]);
 
@@ -941,7 +1094,10 @@ export class ReportsService {
     const allUserIds = Array.from(new Set([
       ...users.map(u => u.userId),
       ...Object.keys(directSalesMap),
+      ...Object.keys(directRefundsMap),
       ...Object.keys(installmentSalesMap),
+      ...Object.keys(downpaymentRefundsMap),
+      ...Object.keys(collectorRefundsMap),
       ...Object.keys(receiptsMap)
     ]));
 
@@ -958,19 +1114,44 @@ export class ReportsService {
       };
 
       const d = directSalesMap[uId] || { directCount: 0, directAmount: 0 };
+      const dr = directRefundsMap[uId] || { refundCount: 0, refundAmount: 0 };
       const i = installmentSalesMap[uId] || { installmentCount: 0, downpaymentsCollected: 0 };
       const r = receiptsMap[uId] || { receiptsCount: 0, collectionsAmount: 0 };
 
-      const totalMoneyHandled = d.directAmount + i.downpaymentsCollected + r.collectionsAmount;
+      const directGrossAmount = d.directAmount;
+      const directRefundAmount = dr.refundAmount;
+      const directNetAmount = Math.max(0, directGrossAmount - directRefundAmount);
+
+      const downpaymentGrossAmount = i.downpaymentsCollected;
+      const downpaymentRefundAmount = downpaymentRefundsMap[uId] || 0;
+      const downpaymentNetAmount = Math.max(0, downpaymentGrossAmount - downpaymentRefundAmount);
+
+      const collectionsGrossAmount = r.collectionsAmount;
+      const collectionsRefundAmount = collectorRefundsMap[uId] || 0;
+      const collectionsNetAmount = Math.max(0, collectionsGrossAmount - collectionsRefundAmount);
+
+      const totalRefundsDeducted = directRefundAmount + downpaymentRefundAmount + collectionsRefundAmount;
+      const totalMoneyHandled = directNetAmount + downpaymentNetAmount + collectionsNetAmount;
 
       fullPayrollData.push({
         ...user,
         directSalesCount: d.directCount,
-        directSalesAmount: d.directAmount,
+        directSalesGrossAmount: directGrossAmount,
+        directRefundsAmount: directRefundAmount,
+        directRefundsCount: dr.refundCount,
+        directSalesAmount: directNetAmount, // Net Direct Sales for commission
+
         installmentSalesCount: i.installmentCount,
-        downpaymentsCollected: i.downpaymentsCollected,
+        downpaymentsGrossAmount: downpaymentGrossAmount,
+        downpaymentsRefundAmount: downpaymentRefundAmount,
+        downpaymentsCollected: downpaymentNetAmount, // Net Downpayment
+
         receiptsCount: r.receiptsCount,
-        collectionsAmount: r.collectionsAmount,
+        collectionsGrossAmount: collectionsGrossAmount,
+        collectionsRefundAmount: collectionsRefundAmount,
+        collectionsAmount: collectionsNetAmount, // Net Collections
+
+        totalRefundsDeducted,
         totalMoneyHandled
       });
     }
@@ -981,9 +1162,19 @@ export class ReportsService {
     const total = fullPayrollData.length;
 
     const summary = {
+      grandTotalDirectSalesGross: fullPayrollData.reduce((sum, u) => sum + u.directSalesGrossAmount, 0),
+      grandTotalDirectRefunds: fullPayrollData.reduce((sum, u) => sum + u.directRefundsAmount, 0),
       grandTotalDirectSales: fullPayrollData.reduce((sum, u) => sum + u.directSalesAmount, 0),
+
+      grandTotalDownpaymentsGross: fullPayrollData.reduce((sum, u) => sum + u.downpaymentsGrossAmount, 0),
+      grandTotalDownpaymentsRefunds: fullPayrollData.reduce((sum, u) => sum + u.downpaymentsRefundAmount, 0),
       grandTotalDownpayments: fullPayrollData.reduce((sum, u) => sum + u.downpaymentsCollected, 0),
+
+      grandTotalCollectionsGross: fullPayrollData.reduce((sum, u) => sum + u.collectionsGrossAmount, 0),
+      grandTotalCollectionsRefunds: fullPayrollData.reduce((sum, u) => sum + u.collectionsRefundAmount, 0),
       grandTotalCollections: fullPayrollData.reduce((sum, u) => sum + u.collectionsAmount, 0),
+
+      grandTotalRefunds: fullPayrollData.reduce((sum, u) => sum + u.totalRefundsDeducted, 0),
       grandTotalHandled: fullPayrollData.reduce((sum, u) => sum + u.totalMoneyHandled, 0),
     };
 
@@ -1029,6 +1220,23 @@ export class ReportsService {
         )
       );
 
+    // Query 1.1: Direct Sales Returns / Refunds for sales created by this user
+    const directRefundsRes = await db
+      .select({
+        count: sql<number>`count(*)`,
+        refundTotal: sql<number>`COALESCE(sum(CAST(${returnsTable.refund_amount} AS DECIMAL(14,2))), 0)`
+      })
+      .from(returnsTable)
+      .innerJoin(salesTable, eq(returnsTable.sale_id, salesTable.id))
+      .where(
+        and(
+          eq(salesTable.created_by, userId),
+          eq(salesTable.sale_type, 'DIRECT'),
+          gte(returnsTable.created_at, startOfMonth),
+          lte(returnsTable.created_at, endOfMonth)
+        )
+      );
+
     // Query 2: Installment Sales by this user in running month
     const installmentSalesRes = await db
       .select({
@@ -1041,11 +1249,68 @@ export class ReportsService {
         and(
           eq(salesTable.created_by, userId),
           eq(salesTable.sale_type, 'INSTALLMENT'),
-          eq(salesTable.status, 'COMPLETED'),
+          ne(salesTable.status, 'CANCELLED'),
           gte(salesTable.created_at, startOfMonth),
           lte(salesTable.created_at, endOfMonth)
         )
       );
+
+    // Query 2.1: Installment Contract Refunds for contracts in running month
+    const refundedContracts = await db.select({
+      contractId: refundsTable.contract_id,
+      salesRepId: salesTable.created_by,
+      downpayment: sql<number>`CAST(${salesTable.downpayment} AS DECIMAL(14,2))`,
+      totalRefunded: sql<number>`SUM(CAST(${refundsTable.amount} AS DECIMAL(14,2)))`
+    })
+    .from(refundsTable)
+    .innerJoin(installmentContractsTable, eq(refundsTable.contract_id, installmentContractsTable.id))
+    .innerJoin(salesTable, eq(installmentContractsTable.sale_id, salesTable.id))
+    .where(
+      and(
+        eq(salesTable.sale_type, 'INSTALLMENT'),
+        ne(salesTable.status, 'CANCELLED'),
+        gte(refundsTable.created_at, startOfMonth),
+        lte(refundsTable.created_at, endOfMonth)
+      )
+    )
+    .groupBy(refundsTable.contract_id, salesTable.created_by, salesTable.downpayment);
+
+    let downpaymentRefundsAmount = 0;
+    let collectorRefundsAmount = 0;
+
+    for (const rc of refundedContracts) {
+      const salesRepId = rc.salesRepId;
+      const downpayment = Number(rc.downpayment || 0);
+      const totalRefunded = Number(rc.totalRefunded || 0);
+
+      // Downpayment deduction attributed to the sales rep
+      const downpaymentDeduction = Math.min(downpayment, totalRefunded);
+      if (salesRepId === userId) {
+        downpaymentRefundsAmount += downpaymentDeduction;
+      }
+
+      // Excess refund beyond downpayment shared pro-rata among collectors on this contract
+      const excessRefund = Math.max(0, totalRefunded - downpayment);
+      if (excessRefund > 0) {
+        const receiptsOnContract = await db.select({
+          collectorId: collectionReceiptsTable.collected_by,
+          amount: sql<number>`SUM(CAST(${collectionReceiptsTable.amount} AS DECIMAL(14,2)))`
+        })
+        .from(collectionReceiptsTable)
+        .where(eq(collectionReceiptsTable.contract_id, rc.contractId))
+        .groupBy(collectionReceiptsTable.collected_by);
+
+        const totalCollectedOnContract = receiptsOnContract.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+        if (totalCollectedOnContract > 0) {
+          for (const rec of receiptsOnContract) {
+            if (rec.collectorId === userId) {
+              const collectorAmt = Number(rec.amount || 0);
+              collectorRefundsAmount += (collectorAmt / totalCollectedOnContract) * excessRefund;
+            }
+          }
+        }
+      }
+    }
 
     // Query 3: Collections / Payment Receipts by this user in running month
     const collectionsRes = await db
@@ -1063,16 +1328,23 @@ export class ReportsService {
       );
 
     const directSalesCount = Number(directSalesRes[0]?.count || 0);
-    const directSalesAmount = Number(directSalesRes[0]?.totalAmount || 0);
+    const directSalesGrossAmount = Number(directSalesRes[0]?.totalAmount || 0);
+    const directRefundsCount = Number(directRefundsRes[0]?.count || 0);
+    const directRefundsAmount = Number(directRefundsRes[0]?.refundTotal || 0);
+    const directSalesNetAmount = Math.max(0, directSalesGrossAmount - directRefundsAmount);
 
     const installmentSalesCount = Number(installmentSalesRes[0]?.count || 0);
-    const installmentDownpaymentsSum = Number(installmentSalesRes[0]?.downpaymentsSum || 0);
+    const installmentDownpaymentsGross = Number(installmentSalesRes[0]?.downpaymentsSum || 0);
     const installmentTotalValue = Number(installmentSalesRes[0]?.totalValueSum || 0);
+    const installmentDownpaymentsNet = Math.max(0, installmentDownpaymentsGross - downpaymentRefundsAmount);
 
     const collectionsCount = Number(collectionsRes[0]?.count || 0);
-    const collectionsAmount = Number(collectionsRes[0]?.collectionsAmount || 0);
+    const collectionsGrossAmount = Number(collectionsRes[0]?.collectionsAmount || 0);
+    const collectionsNetAmount = Math.max(0, collectionsGrossAmount - collectorRefundsAmount);
 
-    const totalMoneyHandled = directSalesAmount + installmentDownpaymentsSum + collectionsAmount;
+    const totalRefundsDeducted = directRefundsAmount + downpaymentRefundsAmount + collectorRefundsAmount;
+    const totalGrossHandled = directSalesGrossAmount + installmentDownpaymentsGross + collectionsGrossAmount;
+    const totalMoneyHandled = directSalesNetAmount + installmentDownpaymentsNet + collectionsNetAmount;
 
     return {
       runningMonth: {
@@ -1083,18 +1355,35 @@ export class ReportsService {
       },
       directSales: {
         count: directSalesCount,
-        totalRevenue: directSalesAmount,
+        grossAmount: directSalesGrossAmount,
+        refundsAmount: directRefundsAmount,
+        refundsCount: directRefundsCount,
+        netAmount: directSalesNetAmount,
+        totalRevenue: directSalesNetAmount, // backward-compatible alias
       },
       installmentSales: {
         count: installmentSalesCount,
-        downpaymentsCollected: installmentDownpaymentsSum,
+        downpaymentsGross: installmentDownpaymentsGross,
+        downpaymentsRefunds: downpaymentRefundsAmount,
+        downpaymentsCollected: installmentDownpaymentsNet, // Net downpayments
         totalContractValue: installmentTotalValue,
       },
       collections: {
         count: collectionsCount,
-        totalCollected: collectionsAmount,
+        collectionsGross: collectionsGrossAmount,
+        collectionsRefunds: collectorRefundsAmount,
+        totalCollected: collectionsNetAmount, // Net collections
+      },
+      refunds: {
+        totalRefundsDeducted,
+        directRefunds: directRefundsAmount,
+        directRefundsCount,
+        downpaymentRefunds: downpaymentRefundsAmount,
+        collectorRefunds: collectorRefundsAmount,
       },
       summary: {
+        totalGrossHandled,
+        totalRefundsDeducted,
         totalMoneyHandled,
       }
     };
@@ -1373,6 +1662,234 @@ export class ReportsService {
         onTrip: onTripCount,
         sold: soldCount,
         activeInstallments: activeInstallmentsCount,
+      }
+    };
+  }
+
+  // --- REFUNDS & RETURNS DETAILED REPORT ---
+
+  static async getRefundsReport(filters: {
+    branchId?: string;
+    staffId?: string;
+    channel?: 'ALL' | 'DIRECT' | 'INSTALLMENT';
+    refundMode?: string;
+    search?: string;
+    startDate?: string;
+    endDate?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const { start, end } = parseReportDateRange(filters.startDate, filters.endDate);
+
+    // Fetch user and branch maps for fast lookup
+    const allUsers = await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable);
+    const userMap: Record<string, string> = Object.fromEntries(allUsers.map(u => [u.id, u.name]));
+
+    const allBranches = await db.select({ id: branchesTable.id, name: branchesTable.name }).from(branchesTable);
+    const branchMap: Record<string, string> = Object.fromEntries(allBranches.map(b => [b.id, b.name]));
+
+    const records: any[] = [];
+
+    // 1. Direct Sales Returns (from returnsTable)
+    if (!filters.channel || filters.channel === 'ALL' || filters.channel === 'DIRECT') {
+      const returnsQuery = db.select({
+        id: returnsTable.id,
+        sale_id: returnsTable.sale_id,
+        reference_number: salesTable.reference_number,
+        offline_receipt_number: salesTable.offline_receipt_number,
+        customer_id: salesTable.customer_id,
+        customer_name: customersTable.full_name,
+        customer_mobile: customersTable.mobile,
+        sale_item_id: returnsTable.sale_item_id,
+        product_name: productsTable.name,
+        serial_number: serialItemsTable.serial_number,
+        return_type: returnsTable.type,
+        disposition: returnsTable.disposition,
+        reason: returnsTable.reason,
+        refund_amount: returnsTable.refund_amount,
+        refund_mode: returnsTable.refund_mode,
+        sold_by_id: salesTable.created_by,
+        processed_by_id: returnsTable.processed_by,
+        branch_id: salesTable.branch_id,
+        created_at: returnsTable.created_at,
+      })
+      .from(returnsTable)
+      .innerJoin(salesTable, eq(returnsTable.sale_id, salesTable.id))
+      .leftJoin(customersTable, eq(salesTable.customer_id, customersTable.id))
+      .leftJoin(saleItemsTable, eq(returnsTable.sale_item_id, saleItemsTable.id))
+      .leftJoin(productsTable, eq(saleItemsTable.product_id, productsTable.id))
+      .leftJoin(serialItemsTable, eq(returnsTable.serial_item_id, serialItemsTable.id));
+
+      const rawReturns = await returnsQuery.execute();
+
+      for (const r of rawReturns) {
+        records.push({
+          id: r.id,
+          channel: 'DIRECT',
+          reference_no: r.offline_receipt_number ? `REC-${r.offline_receipt_number}` : (r.reference_number || `SALE-${r.sale_id.substring(0, 8)}`),
+          sale_id: r.sale_id,
+          customer_id: r.customer_id,
+          customer_name: r.customer_name || 'Walk-in Customer',
+          customer_mobile: r.customer_mobile || '-',
+          product_name: r.product_name || 'Product Item',
+          serial_number: r.serial_number || '-',
+          return_type: r.return_type || 'CUSTOMER_RETURN',
+          disposition: r.disposition || 'RESTOCKED',
+          reason: r.reason || 'Product Return',
+          refund_amount: parseFloat(r.refund_amount || '0'),
+          refund_mode: r.refund_mode || 'CASH',
+          sold_by_id: r.sold_by_id,
+          sold_by_name: userMap[r.sold_by_id] || 'Staff',
+          processed_by_id: r.processed_by_id,
+          processed_by_name: userMap[r.processed_by_id] || 'Staff',
+          branch_id: r.branch_id,
+          branch_name: branchMap[r.branch_id] || '-',
+          created_at: r.created_at,
+        });
+      }
+    }
+
+    // 2. Installment Contract Refunds (from refundsTable)
+    if (!filters.channel || filters.channel === 'ALL' || filters.channel === 'INSTALLMENT') {
+      const refundsQuery = db.select({
+        id: refundsTable.id,
+        contract_id: refundsTable.contract_id,
+        customer_id: refundsTable.customer_id,
+        customer_name: customersTable.full_name,
+        customer_mobile: customersTable.mobile,
+        customer_branch_id: customersTable.branch_id,
+        amount: refundsTable.amount,
+        reason: refundsTable.reason,
+        approved_by_id: refundsTable.approved_by,
+        created_at: refundsTable.created_at,
+        sale_id: installmentContractsTable.sale_id,
+        sold_by_id: salesTable.created_by,
+        sale_branch_id: salesTable.branch_id,
+      })
+      .from(refundsTable)
+      .innerJoin(installmentContractsTable, eq(refundsTable.contract_id, installmentContractsTable.id))
+      .leftJoin(salesTable, eq(installmentContractsTable.sale_id, salesTable.id))
+      .leftJoin(customersTable, eq(refundsTable.customer_id, customersTable.id));
+
+      const rawRefunds = await refundsQuery.execute();
+
+      // Fetch products for these sales
+      const saleIds = [...new Set(rawRefunds.map(r => r.sale_id).filter(Boolean))] as string[];
+      const saleProductsMap: Record<string, string> = {};
+      if (saleIds.length > 0) {
+        const items = await db.select({
+          saleId: saleItemsTable.sale_id,
+          productName: productsTable.name
+        })
+        .from(saleItemsTable)
+        .innerJoin(productsTable, eq(saleItemsTable.product_id, productsTable.id))
+        .where(inArray(saleItemsTable.sale_id, saleIds));
+
+        for (const it of items) {
+          if (!saleProductsMap[it.saleId]) saleProductsMap[it.saleId] = it.productName;
+          else saleProductsMap[it.saleId] += `, ${it.productName}`;
+        }
+      }
+
+      for (const rf of rawRefunds) {
+        const branchId = rf.sale_branch_id || rf.customer_branch_id;
+        records.push({
+          id: rf.id,
+          channel: 'INSTALLMENT',
+          reference_no: `CTR-${rf.contract_id.substring(0, 8)}`,
+          sale_id: rf.sale_id,
+          contract_id: rf.contract_id,
+          customer_id: rf.customer_id,
+          customer_name: rf.customer_name || 'Installment Customer',
+          customer_mobile: rf.customer_mobile || '-',
+          product_name: (rf.sale_id && saleProductsMap[rf.sale_id]) || 'Installment Contract',
+          serial_number: '-',
+          return_type: 'CONTRACT_REFUND',
+          disposition: 'CANCELLED_CONTRACT',
+          reason: rf.reason || 'Contract Refund / Surrender',
+          refund_amount: parseFloat(rf.amount || '0'),
+          refund_mode: 'CASH',
+          sold_by_id: rf.sold_by_id,
+          sold_by_name: rf.sold_by_id ? (userMap[rf.sold_by_id] || 'Staff') : 'Staff',
+          processed_by_id: rf.approved_by_id,
+          processed_by_name: userMap[rf.approved_by_id] || 'Staff',
+          branch_id: branchId,
+          branch_name: branchId ? (branchMap[branchId] || '-') : '-',
+          created_at: rf.created_at,
+        });
+      }
+    }
+
+    // 3. Apply in-memory filters
+    const lowerSearch = (filters.search || '').toLowerCase().trim();
+
+    const filtered = records.filter(r => {
+      // Date filter
+      const rDate = new Date(r.created_at);
+      if (start && rDate < start) return false;
+      if (end && rDate > end) return false;
+
+      // Branch filter
+      if (filters.branchId && r.branch_id !== filters.branchId) return false;
+
+      // Staff filter: check if this staff member sold the item OR processed the refund
+      if (filters.staffId && r.sold_by_id !== filters.staffId && r.processed_by_id !== filters.staffId) {
+        return false;
+      }
+
+      // Refund Mode filter
+      if (filters.refundMode && filters.refundMode !== 'ALL' && r.refund_mode !== filters.refundMode) {
+        return false;
+      }
+
+      // Search filter
+      if (lowerSearch) {
+        const matchesName = r.customer_name?.toLowerCase().includes(lowerSearch);
+        const matchesMobile = r.customer_mobile?.toLowerCase().includes(lowerSearch);
+        const matchesRef = r.reference_no?.toLowerCase().includes(lowerSearch);
+        const matchesProd = r.product_name?.toLowerCase().includes(lowerSearch);
+        const matchesSerial = r.serial_number?.toLowerCase().includes(lowerSearch);
+        const matchesReason = r.reason?.toLowerCase().includes(lowerSearch);
+        const matchesSoldBy = r.sold_by_name?.toLowerCase().includes(lowerSearch);
+        const matchesProcBy = r.processed_by_name?.toLowerCase().includes(lowerSearch);
+
+        if (!matchesName && !matchesMobile && !matchesRef && !matchesProd && !matchesSerial && !matchesReason && !matchesSoldBy && !matchesProcBy) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    // 4. Sort descending
+    filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    // 5. Calculate KPI Summary
+    const totalCount = filtered.length;
+    const directRecords = filtered.filter(r => r.channel === 'DIRECT');
+    const installmentRecords = filtered.filter(r => r.channel === 'INSTALLMENT');
+
+    const grandTotalRefunds = filtered.reduce((sum, r) => sum + r.refund_amount, 0);
+    const directRefundsTotal = directRecords.reduce((sum, r) => sum + r.refund_amount, 0);
+    const installmentRefundsTotal = installmentRecords.reduce((sum, r) => sum + r.refund_amount, 0);
+
+    // 6. Pagination
+    let paginated = filtered;
+    if (filters.page && filters.limit) {
+      const offset = (filters.page - 1) * filters.limit;
+      paginated = filtered.slice(offset, offset + filters.limit);
+    }
+
+    return {
+      data: paginated,
+      total: totalCount,
+      summary: {
+        grandTotalRefunds,
+        directRefundsTotal,
+        installmentRefundsTotal,
+        totalCount,
+        directCount: directRecords.length,
+        installmentCount: installmentRecords.length,
       }
     };
   }

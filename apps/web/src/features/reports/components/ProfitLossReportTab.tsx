@@ -208,7 +208,14 @@ export function ProfitLossReportTab() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
               <span style={{ color: 'var(--text-secondary)' }}>Direct Sales Revenue</span>
-              <span style={{ fontWeight: 500 }}>Rs. {Number(contractual.directSalesRevenue || 0).toLocaleString('en-GB')}</span>
+              <span style={{ fontWeight: 500 }}>
+                Rs. {Number(contractual.directSalesRevenue || 0).toLocaleString('en-GB')}
+                {Number(contractual.directSalesRefunds || 0) > 0 && (
+                  <span style={{ fontSize: '11px', color: 'var(--status-error)', marginLeft: '6px', fontWeight: 600 }}>
+                    (Less: Rs. {Number(contractual.directSalesRefunds).toLocaleString('en-GB')} Refunds)
+                  </span>
+                )}
+              </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
               <span style={{ color: 'var(--text-secondary)' }}>Installment Principal Sold</span>
@@ -253,7 +260,14 @@ export function ProfitLossReportTab() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
               <span style={{ color: 'var(--text-secondary)' }}>Direct Sales Cash</span>
-              <span style={{ fontWeight: 500 }}>Rs. {Number(realized.directSalesCash || 0).toLocaleString('en-GB')}</span>
+              <span style={{ fontWeight: 500 }}>
+                Rs. {Number(realized.directSalesCash || 0).toLocaleString('en-GB')}
+                {Number(realized.directSalesRefunds || 0) > 0 && (
+                  <span style={{ fontSize: '11px', color: 'var(--status-error)', marginLeft: '6px', fontWeight: 600 }}>
+                    (Net of Rs. {Number(realized.directSalesRefunds).toLocaleString('en-GB')} Refunds)
+                  </span>
+                )}
+              </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
               <span style={{ color: 'var(--text-secondary)' }}>Downpayments Collected</span>
@@ -261,7 +275,14 @@ export function ProfitLossReportTab() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
               <span style={{ color: 'var(--text-secondary)' }}>Installment Receipts</span>
-              <span style={{ fontWeight: 500, color: 'var(--brand-primary)' }}>Rs. {Number(realized.receiptsCollected || 0).toLocaleString('en-GB')}</span>
+              <span style={{ fontWeight: 500, color: 'var(--brand-primary)' }}>
+                Rs. {Number(realized.receiptsCollected || 0).toLocaleString('en-GB')}
+                {Number(realized.installmentRefunds || 0) > 0 && (
+                  <span style={{ fontSize: '11px', color: 'var(--status-error)', marginLeft: '6px', fontWeight: 600 }}>
+                    (Less: Rs. {Number(realized.installmentRefunds).toLocaleString('en-GB')} Refunds)
+                  </span>
+                )}
+              </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
               <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Total Cash Inflow</span>

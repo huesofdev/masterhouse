@@ -19,6 +19,7 @@ export function CustomersPage() {
     search,
     routeFilter,
     activeStatus,
+    contractCount,
     pageIndex,
     pageSize,
     setFilters,
@@ -28,6 +29,7 @@ export function CustomersPage() {
       search: '',
       routeFilter: '',
       activeStatus: 'ALL',
+      contractCount: '',
     },
     defaultPageSize: 100,
   });
@@ -37,7 +39,7 @@ export function CustomersPage() {
   const { data: routesData } = useRoutes();
   const routes = routesData || [];
 
-  const { data: result, isLoading } = useCustomers(pageIndex + 1, pageSize, search, routeFilter, activeStatus);
+  const { data: result, isLoading } = useCustomers(pageIndex + 1, pageSize, search, routeFilter, activeStatus, contractCount);
   const customers = result?.data || [];
   const meta = result?.meta;
 
@@ -216,8 +218,8 @@ export function CustomersPage() {
         </PermissionGuard>
       </div>
 
-      <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, maxWidth: '400px' }}>
+      <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: '240px', maxWidth: '400px' }}>
           <Search size={18} color="var(--text-muted)" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
           <input 
             type="text" 
@@ -239,7 +241,7 @@ export function CustomersPage() {
             padding: '10px 16px',
             borderRadius: '8px', border: '1px solid var(--border-color)', 
             background: 'var(--bg-primary)', color: 'var(--text-primary)',
-            outline: 'none', cursor: 'pointer', minWidth: '200px'
+            outline: 'none', cursor: 'pointer', minWidth: '180px'
           }}
         >
           <option value="">All Routes</option>
@@ -254,12 +256,35 @@ export function CustomersPage() {
             padding: '10px 16px',
             borderRadius: '8px', border: '1px solid var(--border-color)', 
             background: 'var(--bg-primary)', color: 'var(--text-primary)',
-            outline: 'none', cursor: 'pointer', minWidth: '150px'
+            outline: 'none', cursor: 'pointer', minWidth: '140px'
           }}
         >
           <option value="ALL">All Status</option>
           <option value="ACTIVE">Active Only</option>
           <option value="INACTIVE">Inactive Only</option>
+        </select>
+        <select
+          value={contractCount}
+          onChange={(e) => setFilters({ contractCount: e.target.value })}
+          style={{
+            padding: '10px 16px',
+            borderRadius: '8px', border: '1px solid var(--border-color)', 
+            background: 'var(--bg-primary)', color: 'var(--text-primary)',
+            outline: 'none', cursor: 'pointer', minWidth: '150px'
+          }}
+        >
+          <option value="">All Contracts</option>
+          <option value="0">0 Contracts</option>
+          <option value="1">1 Contract</option>
+          <option value="2">2 Contracts</option>
+          <option value="3">3 Contracts</option>
+          <option value="4">4 Contracts</option>
+          <option value="5">5 Contracts</option>
+          <option value="6">6 Contracts</option>
+          <option value="7">7 Contracts</option>
+          <option value="8">8 Contracts</option>
+          <option value="9">9 Contracts</option>
+          <option value="10+">10+ Contracts</option>
         </select>
       </div>
 

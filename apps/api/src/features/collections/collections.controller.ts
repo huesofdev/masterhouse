@@ -210,6 +210,17 @@ export const getContractHistory = async (req: Request, res: Response, next: Next
   }
 };
 
+export const getContractBreakdown = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const contractId = req.params.id as string;
+    const breakdown = await CollectionsService.getContractBreakdown(contractId);
+    
+    res.status(200).json({ success: true, data: breakdown });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getScheduleCounts = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const branchId = (req as any).branchId || (req as any).user?.branch_id;

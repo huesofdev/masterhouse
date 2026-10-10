@@ -2,14 +2,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient as api } from '../../lib/axios';
 import { useBranchStore } from '../../hooks/useBranchStore';
 
-export function useCustomers(page: number = 1, limit: number = 100, search: string = '', routeId: string = '', activeStatus: string = 'ALL') {
+export function useCustomers(page: number = 1, limit: number = 100, search: string = '', routeId: string = '', activeStatus: string = 'ALL', contractCount: string = '') {
   const activeBranchId = useBranchStore(state => state.activeBranchId);
   return useQuery({
-    queryKey: ['customers', activeBranchId, page, limit, search, routeId, activeStatus],
+    queryKey: ['customers', activeBranchId, page, limit, search, routeId, activeStatus, contractCount],
     queryFn: async () => {
       const res = await api.get('/customers', {
         headers: { 'x-branch-id': activeBranchId },
-        params: { page, limit, search, route_id: routeId || undefined, activeStatus }
+        params: { page, limit, search, route_id: routeId || undefined, activeStatus, contractCount: contractCount || undefined }
       });
       return { data: res.data.data, meta: res.data.meta };
     },

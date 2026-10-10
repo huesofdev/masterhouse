@@ -116,7 +116,7 @@ export function DataTable<TData, TValue>({
         </table>
       </div>
 
-      {table.getPageCount() > 1 && (
+      {Boolean(serverPagination ? (serverPagination.total > 0) : (table.getPageCount() > 1 || (data?.length || 0) > 0)) && (
         <div style={{ 
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
           padding: '16px', borderTop: '1px solid var(--border-color)',

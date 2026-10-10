@@ -55,3 +55,20 @@ export const retrySms = async (req: Request, res: Response, next: NextFunction):
     res.status(400).json({ success: false, message: error.message });
   }
 };
+
+export const sendCustomSms = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { customer_id, phone, message } = req.body;
+    const userId = (req as any).user?.id;
+
+    if (!customer_id || !phone || !message?.trim()) {
+      res.status(400).json({ success: false, message: "Customer ID, phone number, and message are required." });
+      return;
+    }
+
+    const result = await NotificationsService.sendCustomSms(customer_id, phone, message.trim(), userId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(400).json({ success: false, message: error.message || "Failed to send custom SMS" });
+  }
+};

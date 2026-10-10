@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from 'react';
-import { Search, ShoppingCart, X, CreditCard, Trash2, Printer, DollarSign } from 'lucide-react';
+import { Search, ShoppingCart, X, CreditCard, Trash2, Printer, DollarSign, ChevronLeft, ChevronRight, Layers, Tag } from 'lucide-react';
 import { usePOSSearch, useAvailableSerials } from '../api';
+import { useCategories, useBrands } from '../../catalog/api';
 import { useReactToPrint } from 'react-to-print';
 import { SinglePageCheckout } from '../components/SinglePageCheckout';
 import { useGetSettings, useGetTaxes, useGetMe } from '../../settings/api';
@@ -79,10 +80,84 @@ export function POS2Page() {
   const lastCompletedTotalPayableWithInterest = lastCompletedTotal + lastCompletedInterest;
 
   const [serialSearchQuery, setSerialSearchQuery] = useState('');
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+  const [selectedBrandId, setSelectedBrandId] = useState<string | null>(null);
+  const categoryScrollRef = useRef<HTMLDivElement>(null);
+  const brandScrollRef = useRef<HTMLDivElement>(null);
 
   // We debounce the search input slightly in a real app, here we just use it directly
   const { data: searchResults, isLoading: isSearching } = usePOSSearch(query);
   const { data: availableSerials, isLoading: isLoadingSerials } = useAvailableSerials(selectedProductIdForSerial?.id || null);
+  const { data: categories } = useCategories();
+  const { data: brands } = useBrands();
+  
+  const activeCategories = useMemo(() => categories?.filter((c: any) => c.is_active) || [], [categories]);
+  const activeBrands = useMemo(() => brands?.filter((b: any) => b.is_active) || [], [brands]);
+
+  const allProductMatches = useMemo(() => {
+    return searchResults?.type === 'PRODUCT_MATCH' && Array.isArray(searchResults.data) ? searchResults.data : [];
+  }, [searchResults]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const m of allProductMatches) {
+      const catId = m.product.category_id || m.product.category?.id;
+      if (catId) {
+        counts[catId] = (counts[catId] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [allProductMatches]);
+
+  const brandCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const m of allProductMatches) {
+      const bId = m.product.brand_id || m.product.brand?.id;
+      if (bId) {
+        counts[bId] = (counts[bId] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [allProductMatches]);
+
+  const filteredProducts = useMemo(() => {
+    let list = allProductMatches;
+    if (selectedCategoryId) {
+      list = list.filter((m: any) => {
+        const catId = m.product.category_id || m.product.category?.id;
+        return catId === selectedCategoryId;
+      });
+    }
+    if (selectedBrandId) {
+      list = list.filter((m: any) => {
+        const bId = m.product.brand_id || m.product.brand?.id;
+        return bId === selectedBrandId;
+      });
+    }
+    return list;
+  }, [allProductMatches, selectedCategoryId, selectedBrandId]);
+
+  const selectedCategory = useMemo(() => {
+    if (!selectedCategoryId) return null;
+    return activeCategories.find((c: any) => c.id === selectedCategoryId);
+  }, [activeCategories, selectedCategoryId]);
+
+  const selectedBrand = useMemo(() => {
+    if (!selectedBrandId) return null;
+    return activeBrands.find((b: any) => b.id === selectedBrandId);
+  }, [activeBrands, selectedBrandId]);
+
+  const scrollCategories = (direction: 'left' | 'right') => {
+    if (categoryScrollRef.current) {
+      categoryScrollRef.current.scrollBy({ left: direction === 'left' ? -220 : 220, behavior: 'smooth' });
+    }
+  };
+
+  const scrollBrands = (direction: 'left' | 'right') => {
+    if (brandScrollRef.current) {
+      brandScrollRef.current.scrollBy({ left: direction === 'left' ? -220 : 220, behavior: 'smooth' });
+    }
+  };
   
   const { data: settings } = useGetSettings();
   const { data: taxesData } = useGetTaxes();
@@ -302,29 +377,471 @@ export function POS2Page() {
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 460px', height: 'calc(100vh - 80px)', gap: '24px', overflow: 'hidden', padding: '24px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 80px)', gap: '16px', overflow: 'hidden', padding: '16px 24px' }}>
       
-      {/* Right side visually (Products & Search Area) */}
-      <div className="glass-panel" style={{ order: 1, display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'hidden', padding: '20px' }}>
-        
-        {/* Search Bar */}
-        <div style={{ position: 'relative' }}>
-          <Search style={{ position: 'absolute', left: '16px', top: '14px', color: 'var(--brand-primary)' }} size={20} />
-          <input 
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Scan barcode or search products..."
-            style={{
-              width: '100%', padding: '12px 16px 12px 48px', fontSize: '15px', fontWeight: 500,
-              background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-              borderRadius: '8px', color: 'var(--text-primary)', outline: 'none',
-              transition: 'all 0.2s', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)'
-            }}
-            onFocus={e => e.target.style.border = '1px solid var(--brand-primary)'}
-            onBlur={e => e.target.style.border = '1px solid var(--border-color)'}
-          />
+      {/* Top Full-Width Category & Brand Filter Ribbons */}
+      {(activeCategories.length > 0 || activeBrands.length > 0) && (
+        <div 
+          className="glass-panel"
+          style={{ 
+            display: 'flex', 
+            flexDirection: 'column',
+            padding: '10px 16px', 
+            gap: '8px', 
+            flexShrink: 0,
+            background: 'var(--bg-secondary)',
+            borderRadius: '12px',
+            border: '1px solid var(--border-color)',
+          }}
+        >
+          {/* Row 1: Categories Ribbon */}
+          {activeCategories.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 700, minWidth: '92px', flexShrink: 0 }}>
+                <Layers size={14} color="var(--brand-primary)" />
+                <span>Categories:</span>
+              </div>
+
+              {/* Scroll Left Button */}
+              <button
+                type="button"
+                onClick={() => scrollCategories('left')}
+                title="Scroll Categories Left"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '50%',
+                  width: '22px',
+                  height: '22px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  flexShrink: 0,
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                  e.currentTarget.style.background = 'var(--bg-primary)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                }}
+              >
+                <ChevronLeft size={13} />
+              </button>
+
+              {/* Category Scrolling Track */}
+              <div
+                ref={categoryScrollRef}
+                style={{
+                  display: 'flex',
+                  gap: '6px',
+                  overflowX: 'auto',
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none',
+                  padding: '2px 0',
+                  flex: 1,
+                }}
+              >
+                {/* "All Categories" Chip */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategoryId(null)}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: '16px',
+                    border: selectedCategoryId === null ? '1px solid var(--brand-primary)' : '1px solid var(--border-color)',
+                    background: selectedCategoryId === null ? 'var(--brand-primary)' : 'var(--bg-tertiary)',
+                    color: selectedCategoryId === null ? '#ffffff' : 'var(--text-secondary)',
+                    fontWeight: selectedCategoryId === null ? 700 : 500,
+                    fontSize: '11.5px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    transition: 'all 0.15s ease',
+                    boxShadow: selectedCategoryId === null ? '0 2px 6px rgba(0,0,0,0.15)' : 'none',
+                    flexShrink: 0,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (selectedCategoryId !== null) {
+                      e.currentTarget.style.background = 'var(--bg-primary)';
+                      e.currentTarget.style.color = 'var(--text-primary)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (selectedCategoryId !== null) {
+                      e.currentTarget.style.background = 'var(--bg-tertiary)';
+                      e.currentTarget.style.color = 'var(--text-secondary)';
+                    }
+                  }}
+                >
+                  <span>All Categories</span>
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      padding: '1px 5px',
+                      borderRadius: '10px',
+                      background: selectedCategoryId === null ? 'rgba(255,255,255,0.25)' : 'var(--bg-primary)',
+                      color: selectedCategoryId === null ? '#ffffff' : 'var(--text-muted)',
+                    }}
+                  >
+                    {allProductMatches.length}
+                  </span>
+                </button>
+
+                {/* Individual Category Chips */}
+                {activeCategories.map((cat: any) => {
+                  const isSelected = selectedCategoryId === cat.id;
+                  const count = categoryCounts[cat.id] || 0;
+
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setSelectedCategoryId(isSelected ? null : cat.id)}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '16px',
+                        border: isSelected ? '1px solid var(--brand-primary)' : '1px solid var(--border-color)',
+                        background: isSelected ? 'var(--brand-primary)' : 'var(--bg-tertiary)',
+                        color: isSelected ? '#ffffff' : 'var(--text-secondary)',
+                        fontWeight: isSelected ? 700 : 500,
+                        fontSize: '11.5px',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        transition: 'all 0.15s ease',
+                        boxShadow: isSelected ? '0 2px 6px rgba(0,0,0,0.15)' : 'none',
+                        flexShrink: 0,
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.background = 'var(--bg-primary)';
+                          e.currentTarget.style.color = 'var(--text-primary)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.background = 'var(--bg-tertiary)';
+                          e.currentTarget.style.color = 'var(--text-secondary)';
+                        }
+                      }}
+                    >
+                      <span>{cat.name}</span>
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          padding: '1px 5px',
+                          borderRadius: '10px',
+                          background: isSelected ? 'rgba(255,255,255,0.25)' : 'var(--bg-primary)',
+                          color: isSelected ? '#ffffff' : 'var(--text-muted)',
+                        }}
+                      >
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Scroll Right Button */}
+              <button
+                type="button"
+                onClick={() => scrollCategories('right')}
+                title="Scroll Categories Right"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '50%',
+                  width: '22px',
+                  height: '22px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  flexShrink: 0,
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                  e.currentTarget.style.background = 'var(--bg-primary)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                }}
+              >
+                <ChevronRight size={13} />
+              </button>
+            </div>
+          )}
+
+          {/* Row 2: Brands Ribbon */}
+          {activeBrands.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 700, minWidth: '92px', flexShrink: 0 }}>
+                <Tag size={14} color="#8b5cf6" />
+                <span>Brands:</span>
+              </div>
+
+              {/* Scroll Left Button */}
+              <button
+                type="button"
+                onClick={() => scrollBrands('left')}
+                title="Scroll Brands Left"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '50%',
+                  width: '22px',
+                  height: '22px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  flexShrink: 0,
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                  e.currentTarget.style.background = 'var(--bg-primary)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                }}
+              >
+                <ChevronLeft size={13} />
+              </button>
+
+              {/* Brand Scrolling Track */}
+              <div
+                ref={brandScrollRef}
+                style={{
+                  display: 'flex',
+                  gap: '6px',
+                  overflowX: 'auto',
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none',
+                  padding: '2px 0',
+                  flex: 1,
+                }}
+              >
+                {/* "All Brands" Chip */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedBrandId(null)}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: '16px',
+                    border: selectedBrandId === null ? '1px solid #8b5cf6' : '1px solid var(--border-color)',
+                    background: selectedBrandId === null ? '#8b5cf6' : 'var(--bg-tertiary)',
+                    color: selectedBrandId === null ? '#ffffff' : 'var(--text-secondary)',
+                    fontWeight: selectedBrandId === null ? 700 : 500,
+                    fontSize: '11.5px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    transition: 'all 0.15s ease',
+                    boxShadow: selectedBrandId === null ? '0 2px 6px rgba(139,92,246,0.25)' : 'none',
+                    flexShrink: 0,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (selectedBrandId !== null) {
+                      e.currentTarget.style.background = 'var(--bg-primary)';
+                      e.currentTarget.style.color = 'var(--text-primary)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (selectedBrandId !== null) {
+                      e.currentTarget.style.background = 'var(--bg-tertiary)';
+                      e.currentTarget.style.color = 'var(--text-secondary)';
+                    }
+                  }}
+                >
+                  <span>All Brands</span>
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      padding: '1px 5px',
+                      borderRadius: '10px',
+                      background: selectedBrandId === null ? 'rgba(255,255,255,0.25)' : 'var(--bg-primary)',
+                      color: selectedBrandId === null ? '#ffffff' : 'var(--text-muted)',
+                    }}
+                  >
+                    {allProductMatches.length}
+                  </span>
+                </button>
+
+                {/* Individual Brand Chips */}
+                {activeBrands.map((brand: any) => {
+                  const isSelected = selectedBrandId === brand.id;
+                  const count = brandCounts[brand.id] || 0;
+
+                  return (
+                    <button
+                      key={brand.id}
+                      type="button"
+                      onClick={() => setSelectedBrandId(isSelected ? null : brand.id)}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '16px',
+                        border: isSelected ? '1px solid #8b5cf6' : '1px solid var(--border-color)',
+                        background: isSelected ? '#8b5cf6' : 'var(--bg-tertiary)',
+                        color: isSelected ? '#ffffff' : 'var(--text-secondary)',
+                        fontWeight: isSelected ? 700 : 500,
+                        fontSize: '11.5px',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        transition: 'all 0.15s ease',
+                        boxShadow: isSelected ? '0 2px 6px rgba(139,92,246,0.25)' : 'none',
+                        flexShrink: 0,
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.background = 'var(--bg-primary)';
+                          e.currentTarget.style.color = 'var(--text-primary)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.background = 'var(--bg-tertiary)';
+                          e.currentTarget.style.color = 'var(--text-secondary)';
+                        }
+                      }}
+                    >
+                      <span>{brand.name}</span>
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          padding: '1px 5px',
+                          borderRadius: '10px',
+                          background: isSelected ? 'rgba(255,255,255,0.25)' : 'var(--bg-primary)',
+                          color: isSelected ? '#ffffff' : 'var(--text-muted)',
+                        }}
+                      >
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Scroll Right Button */}
+              <button
+                type="button"
+                onClick={() => scrollBrands('right')}
+                title="Scroll Brands Right"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '50%',
+                  width: '22px',
+                  height: '22px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  flexShrink: 0,
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                  e.currentTarget.style.background = 'var(--bg-primary)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                }}
+              >
+                <ChevronRight size={13} />
+              </button>
+            </div>
+          )}
+
+          {/* Active Filter Clear Helper Badge */}
+          {(selectedCategoryId !== null || selectedBrandId !== null) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '4px', borderTop: '1px dashed var(--border-color)' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
+                Active Filters: {selectedCategory ? `Category: ${selectedCategory.name}` : ''}{selectedCategory && selectedBrand ? ' · ' : ''}{selectedBrand ? `Brand: ${selectedBrand.name}` : ''} ({filteredProducts.length} matching products)
+              </span>
+              <button
+                type="button"
+                onClick={() => { setSelectedCategoryId(null); setSelectedBrandId(null); }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '2px 8px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  color: '#ef4444',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  cursor: 'pointer',
+                  marginLeft: 'auto'
+                }}
+              >
+                <X size={11} />
+                <span>Reset Filters</span>
+              </button>
+            </div>
+          )}
         </div>
+      )}
+
+      {/* Main Two-Column POS Workspace */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 460px', flex: 1, gap: '20px', overflow: 'hidden' }}>
+        
+        {/* Left side: Products & Search Area */}
+        <div className="glass-panel" style={{ order: 1, display: 'flex', flexDirection: 'column', gap: '14px', overflow: 'hidden', padding: '18px' }}>
+          
+          {/* Search Bar */}
+          <div style={{ position: 'relative' }}>
+            <Search style={{ position: 'absolute', left: '16px', top: '14px', color: 'var(--brand-primary)' }} size={20} />
+            <input 
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={
+                selectedCategory && selectedBrand
+                  ? `Search inside ${selectedCategory.name} (${selectedBrand.name}) or scan barcode...`
+                  : selectedCategory
+                  ? `Search inside ${selectedCategory.name} or scan barcode...`
+                  : selectedBrand
+                  ? `Search inside ${selectedBrand.name} or scan barcode...`
+                  : "Scan barcode or search products..."
+              }
+              style={{
+                width: '100%', padding: '12px 16px 12px 48px', fontSize: '15px', fontWeight: 500,
+                background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+                borderRadius: '8px', color: 'var(--text-primary)', outline: 'none',
+                transition: 'all 0.2s', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)'
+              }}
+              onFocus={e => e.target.style.border = '1px solid var(--brand-primary)'}
+              onBlur={e => e.target.style.border = '1px solid var(--border-color)'}
+            />
+          </div>
 
         {/* Product Grid */}
         <div style={{ flex: 1, overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px', alignContent: 'start', paddingRight: '4px' }}>
@@ -333,12 +850,13 @@ export function POS2Page() {
           {searchResults?.type === 'SERIAL_MATCH' && (
             <div 
               onClick={() => addToCart(searchResults.data.product, searchResults.data.serialItem, 1)}
-              style={{ background: 'var(--brand-primary)', color: 'white', padding: '16px', borderRadius: '8px', cursor: 'pointer' }}
+              style={{ background: 'var(--brand-primary)', color: 'white', padding: '16px', borderRadius: '8px', cursor: 'pointer', gridColumn: '1 / -1' }}
             >
               <h3>EXACT SERIAL MATCH</h3>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <p>{searchResults.data.product.name}</p>
                 {searchResults.data.product.brand && <span style={{ fontSize: '10px', background: 'rgba(255,255,255,0.2)', padding: '2px 6px', borderRadius: '4px' }}>{searchResults.data.product.brand.name}</span>}
+                {searchResults.data.product.category && <span style={{ fontSize: '10px', background: 'rgba(255,255,255,0.2)', padding: '2px 6px', borderRadius: '4px' }}>{searchResults.data.product.category.name}</span>}
                 {searchResults.data.product.last_purchase_price && (
                   <PermissionGuard permission="sales:view_cost">
                     <div title={`Last Purchase Price: Rs. ${parseFloat(searchResults.data.product.last_purchase_price).toFixed(2)}`} style={{ display: 'flex', alignItems: 'center', marginLeft: '8px', color: 'var(--brand-primary)' }}>
@@ -352,7 +870,34 @@ export function POS2Page() {
             </div>
           )}
 
-          {searchResults?.type === 'PRODUCT_MATCH' && searchResults.data.map((match: any) => (
+          {searchResults?.type === 'PRODUCT_MATCH' && filteredProducts.length === 0 && (
+            <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px 20px', color: 'var(--text-secondary)' }}>
+              <p style={{ fontSize: '14px', fontWeight: 600 }}>
+                No products found {selectedCategory && selectedBrand ? `for "${selectedCategory.name}" and "${selectedBrand.name}"` : selectedCategory ? `in "${selectedCategory.name}"` : selectedBrand ? `for "${selectedBrand.name}"` : ''}.
+              </p>
+              {(selectedCategoryId || selectedBrandId) && (
+                <button
+                  type="button"
+                  onClick={() => { setSelectedCategoryId(null); setSelectedBrandId(null); }}
+                  style={{
+                    marginTop: '10px',
+                    padding: '6px 14px',
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    color: 'var(--brand-primary)',
+                    fontWeight: 600,
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Clear Filters ({allProductMatches.length} Products)
+                </button>
+              )}
+            </div>
+          )}
+
+          {searchResults?.type === 'PRODUCT_MATCH' && filteredProducts.map((match: any) => (
             <div 
               key={match.product.id}
               onClick={() => {
@@ -385,7 +930,7 @@ export function POS2Page() {
                   </PermissionGuard>
                 )}
               </h4>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{match.product.sku}</span>
                 {match.product.brand && (
                   <span style={{ 
@@ -398,6 +943,19 @@ export function POS2Page() {
                     border: '1px solid var(--border-color)'
                   }}>
                     {match.product.brand.name}
+                  </span>
+                )}
+                {match.product.category && (
+                  <span style={{ 
+                    fontSize: '10px', 
+                    padding: '2px 6px', 
+                    background: 'rgba(59, 130, 246, 0.08)', 
+                    color: '#60a5fa', 
+                    borderRadius: '4px',
+                    fontWeight: 500,
+                    border: '1px solid rgba(59, 130, 246, 0.2)'
+                  }}>
+                    {match.product.category.name}
                   </span>
                 )}
               </div>
@@ -674,6 +1232,7 @@ export function POS2Page() {
           </PermissionGuard>
         </div>
         </>)}
+      </div>
       </div>
 
       {selectedProductIdForSerial && (

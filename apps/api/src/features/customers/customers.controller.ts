@@ -27,8 +27,9 @@ export const listCustomers = async (req: Request, res: Response, next: NextFunct
     const search = (req.query.search as string) || (req.query.q as string) || '';
     const routeId = (req.query.route_id as string) || undefined;
     const activeStatus = (req.query.activeStatus as string) || 'ALL';
+    const contractCount = (req.query.contractCount as string) || (req.query.contract_count as string) || undefined;
 
-    const result = await CustomersService.listCustomers(branchId, page, limit, search, routeId, activeStatus);
+    const result = await CustomersService.listCustomers(branchId, page, limit, search, routeId, activeStatus, contractCount);
     res.status(200).json({ success: true, data: result.data, meta: result.meta });
   } catch (error) {
     next(error);

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createAdjustment, freezeContract, resumeContract, createScheme, listSchemes, updateScheme, createReceipt, listSchedules, printReceipt, syncReceipt, logAttempt, getContractHistory, getScheduleCounts, getMapData } from "./collections.controller";
+import { createAdjustment, freezeContract, resumeContract, createScheme, listSchemes, updateScheme, createReceipt, listSchedules, printReceipt, syncReceipt, logAttempt, getContractHistory, getContractBreakdown, getScheduleCounts, getMapData } from "./collections.controller";
 import { requireAuth } from "../../middlewares/jwt.middleware";
 import { requireBranchScope } from "../../middlewares/branch.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
@@ -29,6 +29,7 @@ router.get("/schedules", requirePermission("collections:read"), listSchedules);
 router.post("/contracts/:id/freeze", requirePermission("collections:update"), freezeContract);
 router.post("/contracts/:id/resume", requirePermission("collections:update"), resumeContract);
 router.get("/contracts/:id/history", requirePermission("collections:read"), getContractHistory);
+router.get("/contracts/:id/breakdown", requirePermission("collections:read"), getContractBreakdown);
 
 // Collection Attempts
 router.post("/attempts", requirePermission("collections:create"), logAttempt);

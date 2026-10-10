@@ -487,11 +487,18 @@ export const exportPayrollReport = async (req: Request, res: Response) => {
       { header: 'Role', key: 'role', width: 15 },
       { header: 'Branch', key: 'branchName', width: 20 },
       { header: 'Direct Sales Count', key: 'directSalesCount', width: 18 },
-      { header: 'Direct Sales Revenue (Rs.)', key: 'directSalesAmount', width: 25 },
+      { header: 'Direct Sales Gross (Rs.)', key: 'directSalesGrossAmount', width: 22 },
+      { header: 'Direct Refunds Deducted (Rs.)', key: 'directRefundsAmount', width: 25 },
+      { header: 'Net Direct Sales (Rs.)', key: 'directSalesAmount', width: 22 },
       { header: 'Installment Sales Count', key: 'installmentSalesCount', width: 20 },
-      { header: 'Installment Downpayments (Rs.)', key: 'downpaymentsCollected', width: 25 },
+      { header: 'Downpayments Gross (Rs.)', key: 'downpaymentsGrossAmount', width: 24 },
+      { header: 'Downpayments Refunds Deducted (Rs.)', key: 'downpaymentsRefundAmount', width: 28 },
+      { header: 'Net Downpayments (Rs.)', key: 'downpaymentsCollected', width: 24 },
       { header: 'Collections Count', key: 'receiptsCount', width: 18 },
-      { header: 'Installment Collections (Rs.)', key: 'collectionsAmount', width: 25 },
+      { header: 'Collections Gross (Rs.)', key: 'collectionsGrossAmount', width: 24 },
+      { header: 'Collections Refunds Deducted (Rs.)', key: 'collectionsRefundAmount', width: 28 },
+      { header: 'Net Collections (Rs.)', key: 'collectionsAmount', width: 24 },
+      { header: 'Total Refunds Deducted (Rs.)', key: 'totalRefundsDeducted', width: 26 },
       { header: 'Total Money Handled (Rs.)', key: 'totalMoneyHandled', width: 25 },
     ];
 
@@ -590,6 +597,83 @@ export const exportSerialLifecycleReport = async (req: Request, res: Response) =
     
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename=Serial_Lifecycle_Report.xlsx');
+    res.send(buffer);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getRefundsReport = async (req: Request, res: Response) => {
+  try {
+    const filters = {
+      branchId: (req.query.branchId as string) || (req as any).branchId || (req.headers["x-branch-id"] as string),
+      staffId: req.query.staffId as string,
+      channel: req.query.channel as any,
+      refundMode: req.query.refundMode as string,
+      search: req.query.search as string,
+      startDate: req.query.startDate as string,
+      endDate: req.query.endDate as string,
+      page: req.query.page ? parseInt(req.query.page as string, 10) : 1,
+      limit: req.query.limit ? parseInt(req.query.limit as string, 10) : 50,
+    };
+    const result = await ReportsService.getRefundsReport(filters);
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const exportRefundsReport = async (req: Request, res: Response) => {
+  try {
+    const filters = {
+      branchId: (req.query.branchId as string) || (req as any).branchId || (req.headers["x-branch-id"] as string),
+      staffId: req.query.staffId as string,
+      channel: req.query.channel as any,
+      refundMode: req.query.refundMode as string,
+      search: req.query.search as string,
+      startDate: req.query.startDate as string,
+      endDate: req.query.endDate as string,
+    };
+    const { data } = await ReportsService.getRefundsReport(filters);
+
+    const exportRows = data.map((r: any) => ({
+      'Date': new Date(r.created_at).toLocaleString('en-GB'),
+      'Channel': r.channel,
+      'Reference #': r.reference_no,
+      'Customer Name': r.customer_name,
+      'Customer Phone': r.customer_mobile,
+      'Product / Item': r.product_name,
+      'Serial Number': r.serial_number,
+      'Sold By': r.sold_by_name,
+      'Processed / Approved By': r.processed_by_name,
+      'Reason / Remarks': r.reason,
+      'Return Disposition': r.disposition,
+      'Refund Mode': r.refund_mode,
+      'Refund Amount (Rs.)': r.refund_amount,
+      'Branch': r.branch_name,
+    }));
+
+    const columns = [
+      { header: 'Date', key: 'Date', width: 20 },
+      { header: 'Channel', key: 'Channel', width: 15 },
+      { header: 'Reference #', key: 'Reference #', width: 18 },
+      { header: 'Customer Name', key: 'Customer Name', width: 24 },
+      { header: 'Customer Phone', key: 'Customer Phone', width: 18 },
+      { header: 'Product / Item', key: 'Product / Item', width: 28 },
+      { header: 'Serial Number', key: 'Serial Number', width: 20 },
+      { header: 'Sold By', key: 'Sold By', width: 20 },
+      { header: 'Processed / Approved By', key: 'Processed / Approved By', width: 22 },
+      { header: 'Reason / Remarks', key: 'Reason / Remarks', width: 30 },
+      { header: 'Return Disposition', key: 'Return Disposition', width: 20 },
+      { header: 'Refund Mode', key: 'Refund Mode', width: 16 },
+      { header: 'Refund Amount (Rs.)', key: 'Refund Amount (Rs.)', width: 22 },
+      { header: 'Branch', key: 'Branch', width: 20 },
+    ];
+
+    const buffer = await ReportsService.generateExcel('Refunds & Returns Audit', columns, exportRows);
+    
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=Refunds_Report.xlsx');
     res.send(buffer);
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });

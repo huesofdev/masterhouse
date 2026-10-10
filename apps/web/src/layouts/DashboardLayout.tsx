@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { Tags, Tag, Users, LayoutDashboard, Settings, Map, Truck, Building2, PackagePlus, Box, Shield, Calendar, Menu, X, PackageSearch, CreditCard, LogOut, Banknote, AlertTriangle, CornerUpLeft, ShieldAlert, FileText, FileSpreadsheet, CheckCircle2, MessageSquare, User, ChevronDown, ChevronRight, Target, Monitor, Wallet, RefreshCcw, Barcode } from 'lucide-react';
+import { Tags, Tag, Users, LayoutDashboard, Settings, Map, Truck, Building2, PackagePlus, Box, Shield, Calendar, Menu, X, PackageSearch, CreditCard, LogOut, Banknote, AlertTriangle, CornerUpLeft, ShieldAlert, FileText, FileSpreadsheet, CheckCircle2, MessageSquare, User, ChevronDown, ChevronRight, Target, Monitor, Wallet, RefreshCcw, Barcode, RotateCcw } from 'lucide-react';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { BranchSwitcher } from '../components/BranchSwitcher';
 import { PermissionGuard } from '../components/PermissionGuard';
@@ -158,6 +158,7 @@ export function DashboardLayout() {
             <NavItem to="/reports/product-performance" icon={<PackageSearch size={16} />} label="Product Performance" active={location.pathname === '/reports/product-performance'} isSubItem />
             <NavItem to="/reports/bookings" icon={<FileText size={16} />} label="Bookings & Preorders" active={location.pathname === '/reports/bookings'} isSubItem />
             <NavItem to="/reports/payroll" icon={<Users size={16} />} label="Staff Payroll & Collections" active={location.pathname === '/reports/payroll'} isSubItem />
+            <NavItem to="/reports/refunds" icon={<RotateCcw size={16} />} label="Refunds & Returns" active={location.pathname === '/reports/refunds'} isSubItem />
             <NavItem to="/reports/serials" icon={<Barcode size={16} />} label="Serial Lifecycle Audit" active={location.pathname === '/reports/serials'} isSubItem />
             <NavItem to="/reports/receipts" icon={<Banknote size={16} />} label="Receipts Report" active={location.pathname === '/reports/receipts'} isSubItem />
             <NavItem to="/reports/contracts" icon={<FileSpreadsheet size={16} />} label="Contract Wise" active={location.pathname === '/reports/contracts'} isSubItem />

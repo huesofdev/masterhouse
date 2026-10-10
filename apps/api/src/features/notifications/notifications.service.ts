@@ -168,4 +168,72 @@ export class NotificationsService {
       return false;
     }
   }
+
+  /**
+   * Send a direct custom SMS to a customer with audit logging
+   */
+  static async sendCustomSms(
+    customerId: string,
+    phone: string,
+    message: string,
+    sentBy?: string
+  ): Promise<{ success: boolean; message: string; logId: string }> {
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage) {
+      throw new Error("Message content cannot be empty");
+    }
+
+    const trimmedPhone = phone.trim();
+    if (!trimmedPhone) {
+      throw new Error("Customer phone number is missing or invalid");
+    }
+
+    // 0. Check global SMS setting
+    const smsEnabled = await SettingsService.getSetting("sms_enabled");
+    if (smsEnabled === "false") {
+      throw new Error("SMS service is currently disabled in system settings");
+    }
+
+    const logId = uuidv7();
+
+    // 1. Insert pending SMS log
+    await db.insert(smsLogsTable).values({
+      id: logId,
+      customer_id: customerId,
+      trigger_event: "CUSTOM",
+      phone_number: trimmedPhone,
+      message_body: trimmedMessage,
+      status: "PENDING"
+    });
+
+    try {
+      // 2. Send via Text.lk Provider
+      const response = await TextLkProvider.sendSMS(trimmedPhone, trimmedMessage);
+
+      // 3. Mark as sent
+      await db.update(smsLogsTable)
+        .set({
+          status: "SENT",
+          sent_at: new Date(),
+          provider_response: JSON.stringify(response)
+        })
+        .where(eq(smsLogsTable.id, logId));
+
+      return {
+        success: true,
+        message: "SMS sent successfully",
+        logId
+      };
+    } catch (error: any) {
+      console.error(`[Custom SMS Error to ${trimmedPhone}]`, error.message);
+      await db.update(smsLogsTable)
+        .set({
+          status: "FAILED",
+          provider_response: error.message || "Failed to send SMS"
+        })
+        .where(eq(smsLogsTable.id, logId));
+
+      throw new Error(error.message || "Failed to send SMS via telecom provider");
+    }
+  }
 }
