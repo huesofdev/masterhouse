@@ -60,7 +60,7 @@ A robust, enterprise-grade multi-branch Enterprise Resource Planning (ERP), Poin
 | **Backend API** | Node.js, Express, TypeScript, Drizzle ORM, MySQL 8 |
 | **Frontend Web** | React 19, Vite, TanStack Query, TanStack Table, Leaflet Maps, Lucide Icons, React Hook Form, Zod |
 | **Mobile App** | React Native, Expo, Expo Router, NativeWind (TailwindCSS), SQLite (Offline-First) |
-| **Storage & Media** | AWS S3 / Cloudflare R2 / MinIO with Presigned URLs & Sharp Image Processing |
+| **Storage & Media** | Local File Storage (default fallback) or AWS S3 / Cloudflare R2 / MinIO with Presigned URLs |
 | **Build & Bundler** | tsup (API), Vite (Web) |
 
 ---
@@ -122,12 +122,15 @@ DB_URL=mysql://root:password@localhost:3306/masterhousenew
 # JWT Auth Secret
 JWT_SECRET=super_secret_jwt_key_masterhouse_2026
 
-# S3 / R2 Bucket (For image & NIC uploads)
-S3_BUCKET_NAME=masterhouse-uploads
-S3_REGION=auto
-S3_ENDPOINT=https://your-s3-or-r2-endpoint.com
-S3_ACCESS_KEY_ID=your_access_key_id
-S3_SECRET_ACCESS_KEY=your_secret_access_key
+# File & Image Storage (OPTIONAL - Defaults to Local Disk Storage)
+# If S3 credentials are not provided, the API automatically saves images, signatures,
+# and KYC documents to `apps/api/uploads/` and serves them statically at `/uploads`.
+# S3 / Cloudflare R2 is only needed if you want cloud object storage.
+# S3_BUCKET_NAME=masterhouse-uploads
+# S3_REGION=auto
+# S3_ENDPOINT=https://your-s3-or-r2-endpoint.com
+# S3_ACCESS_KEY_ID=your_access_key_id
+# S3_SECRET_ACCESS_KEY=your_secret_access_key
 ```
 
 #### 2. Frontend Web (`apps/web/.env`)
